@@ -1,0 +1,43 @@
+<!doctype html>
+<html data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Manifest Viewer</title>
+    <link rel="stylesheet" href="viewer.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="left">
+        <input id="url" type="url" placeholder="https://…/manifest.mpd or .m3u8" />
+      </div>
+      <div class="right">
+        <select id="mode">
+          <option value="auto">Auto</option>
+          <option value="dash">DASH (.mpd)</option>
+          <option value="hls">HLS (.m3u8)</option>
+        </select>
+        <input id="ua" type="text" placeholder="Custom User-Agent (optional)" />
+        <button id="refresh" title="Fetch / Refresh">↻ Refresh</button>
+        <button id="copy" title="Copy manifest text">⧉ Copy</button>
+        <button id="toggleTheme" title="Toggle theme">☀️/🌙</button>
+      </div>
+    </header>
+
+    <main>
+  <section class="pane">
+    <aside id="meta" class="meta-panel"></aside>
+
+    <section id="viewer" class="code-panel">
+      <pre><code id="code" class="language-plain">Paste or load a URL to view the manifest…</code></pre>
+    </section>
+  </section>
+</main>
+
+    <footer>
+      <small>Syntax highlighting is built-in for XML (DASH) and HLS tags (#EXT…).</small>
+    </footer>
+
+    <script src="viewer.js"></script>
+  </body>
+</html>

@@ -1,0 +1,276 @@
+:root {
+  --bg: #0b0b0f;
+  --text: #e6e6eb;
+  --muted: #9aa0a6;
+  --acc1: #8ab4f8; /* tags */
+  --acc2: #f28b82; /* attr names / directives */
+  --acc3: #81c995; /* values */
+  --panel: #111216;
+  --border: #272a33;
+  --pad: 16px;
+}
+
+html[data-theme="light"] {
+  --bg: #ffffff;
+  --text: #111217;
+  --muted: #6b7280;
+  --acc1: #1e40af;
+  --acc2: #c2410c;
+  --acc3: #047857;
+  --panel: #f8fafc;
+  --border: #e5e7eb;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+}
+
+/* --- Top Bar (stable grid, no weird breakpoints) --- */
+.topbar {
+  display: grid;
+  grid-template-columns: 1fr auto;   /* left area | right tools */
+  grid-auto-rows: min-content;
+  gap: 10px 8px;
+  align-items: center;
+  padding: 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+/* URL + Mode ALWAYS together on the same row */
+.topbar .left {
+  display: grid;
+  grid-template-columns: 1fr auto;   /* URL grows, Mode hugs right */
+  gap: 8px;
+  min-width: 0;                      /* prevent overflow */
+}
+
+/* Right-side tools (UA, Refresh, Copy, Theme) */
+.topbar .right {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;                   /* can wrap within its own cell */
+  min-width: 0;
+}
+
+/* Controls: unify heights and typography */
+.topbar input[type="url"],
+.topbar input[type="text"],
+.topbar select,
+.topbar button {
+  height: 36px;
+  line-height: 36px;
+  padding: 0 10px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+}
+
+/* URL grows naturally */
+.topbar input[type="url"] {
+  width: 100%;
+  min-width: 0;
+  text-overflow: ellipsis;
+}
+
+/* Make Mode a tidy fixed width so it stays close to URL */
+.topbar select#mode {
+  width: 120px;          /* tweak if you want narrower/wider */
+  min-width: 110px;
+}
+
+/* Hover polish */
+.topbar button:hover { border-color: var(--acc1); }
+
+/* RESPONSIVE: below 780px, push tools to a second line */
+@media (max-width: 780px) {
+  .topbar {
+    grid-template-columns: 1fr;      /* single column header */
+  }
+
+  /* Left (URL + Mode) stays on row 1 together */
+  .topbar .left {
+    grid-column: 1 / -1;
+  }
+
+  /* Right tools move to row 2 */
+  .topbar .right {
+    grid-column: 1 / -1;
+    justify-content: flex-start;     /* align to left under URL/Mode */
+    row-gap: 8px;
+  }
+}
+
+
+/* --- Main Layout --- */
+main {
+  padding: 12px;
+}
+
+/* Rounded container holding meta + manifest */
+.pane {
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+/* --- Meta Info (Top) --- */
+.meta-panel {
+  padding: var(--pad);
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  min-width: 280px; /* prevent collapsing */
+}
+
+/* Default (desktop / tablet): vertical stack */
+#meta .item {
+  display: flex;
+  flex-direction: column;   /* values below titles */
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.5;
+  word-break: break-all;
+}
+
+#meta .item strong {
+  color: var(--text);
+  margin-bottom: 2px;       /* small vertical gap */
+  font-weight: 600;
+}
+
+#meta .item span {
+  color: var(--muted);
+  margin-left: 0.5em;       /* subtle indent for values */
+}
+
+/* --- Manifest Code (Right) --- */
+.code-panel {
+  padding: var(--pad);
+  overflow: auto;
+}
+
+pre {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+code {
+  font-size: 10px;
+  white-space: pre;
+  display: block;
+  overflow-x: auto;
+}
+
+/* --- Syntax Highlighting --- */
+.token.tag {
+  color: var(--acc1);
+}
+.token.attr-name,
+.token.directive {
+  color: var(--acc2);
+}
+.token.attr-value,
+.token.uri {
+  color: var(--acc3);
+}
+.token.comment {
+  color: var(--muted);
+}
+.token.key {
+  color: var(--acc2);
+}
+.token.value {
+  color: var(--acc3);
+}
+
+/* --- Footer --- */
+footer {
+  border-top: 1px solid var(--border);
+  padding: 10px 12px;
+  color: var(--muted);
+  background: var(--panel);
+}
+
+/* --- Responsive Stack --- */
+/* Rounded container holding meta (top) + manifest (below) */
+.pane {
+  display: flex;              /* was: grid */
+  flex-direction: column;     /* stack vertically, always */
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+/* Meta panel (always top) */
+.meta-panel {
+  padding: var(--pad);
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);  /* was right border in sidebar layout */
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 8px 12px;
+}
+
+/* Code panel (always below) */
+.code-panel {
+  padding: var(--pad);
+  overflow: auto;
+}
+
+.token.uri,
+a[data-hls-uri] {
+  color: var(--acc3);
+  text-decoration: underline;
+  cursor: pointer;
+}
+a[data-hls-uri]:hover {
+  color: var(--acc1);
+}
+
+
+/* Since layout is always stacked now, you can remove this responsive rule: */
+@media (max-width: 780px) {
+  .topbar {
+    grid-template-columns: 1fr;      /* single column header */
+  }
+
+  /* Left (URL + Mode) stays on row 1 together */
+  .topbar .left {
+    grid-column: 1 / -1;
+  }
+
+  /* Right tools move to row 2 */
+  .topbar .right {
+    grid-column: 1 / -1;
+    justify-content: flex-start;     /* align to left under URL/Mode */
+    row-gap: 8px;
+  }
+}
