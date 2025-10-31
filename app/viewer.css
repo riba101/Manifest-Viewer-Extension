@@ -209,6 +209,16 @@ code {
 .token.value {
   color: var(--acc3);
 }
+.token.string {
+  color: var(--acc3);
+}
+.token.number {
+  color: var(--acc1);
+}
+.token.boolean,
+.token.null {
+  color: var(--acc2);
+}
 
 /* --- Footer --- */
 footer {
