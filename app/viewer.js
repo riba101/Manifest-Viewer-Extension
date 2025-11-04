@@ -6,6 +6,7 @@ const refreshBtn = $('refresh');
 const copyManifestBtn = $('copyManifest');
 const downloadManifestBtn = $('downloadManifest');
 const copyManifestUrlBtn = $('copyManifestUrl');
+const backBtn = $('back');
 const codeEl = $('code');
 const metaEl = $('meta');
 const toggleThemeBtn = $('toggleTheme');
@@ -13,6 +14,11 @@ const entityDecoder = document.createElement('textarea');
 let lastLoadedUrl = '';
 let lastLoadedText = '';
 let hasLoadedManifest = false;
+let lastLoadedBuffer = null;
+let lastLoadedMode = 'auto';
+let lastLoadedContentType = '';
+let lastResponseMeta = null;
+const navigationStack = [];
 
 // Init from query params
 const params = new URLSearchParams(location.search);
@@ -63,8 +69,21 @@ function formatDuration(ms) {
   return `${(ms / 1000).toFixed(2)} s`;
 }
 
+function isLikelyMp4(url, contentType = '', bytes) {
+  const lowerUrl = (url || '').toLowerCase();
+  const ct = (contentType || '').toLowerCase();
+  if (/\.(?:mp4|m4s|m4a|m4v|ismv|cmfv|cmft|cmfa)(?:$|\?)/.test(lowerUrl)) return true;
+  if (ct.includes('mp4') || ct.includes('isobmff') || ct.includes('cmaf') || ct.includes('fragmented')) return true;
+  if (bytes && bytes.length >= 8) {
+    const type = String.fromCharCode(bytes[4], bytes[5], bytes[6], bytes[7]);
+    if (type === 'ftyp' || type === 'styp' || type === 'moov' || type === 'uuid') return true;
+  }
+  return false;
+}
+
 function detectMode(url, bodyText, contentType = '') {
   if (modeSelect.value !== 'auto') return modeSelect.value;
+  if (isLikelyMp4(url, contentType)) return 'mp4';
   const ct = contentType.toLowerCase();
   const trimmed = bodyText.trim();
   const sanitized = trimmed.charCodeAt(0) === 0xfeff ? trimmed.slice(1) : trimmed;
@@ -102,6 +121,610 @@ function highlightDASH(xml, baseUrl) {
     });
   out = linkifyDashContentSteeringText(out, baseUrl);
   return out;
+}
+
+const dashState = {
+  panel: null,
+  summary: null,
+  body: null,
+  toolbar: null,
+  baseSelect: null,
+  list: null,
+  data: null,
+  selectedBase: 'auto',
+  mediaHandlers: [],
+};
+
+function cleanupDashDecorations() {
+  removeMediaTemplateHandlers();
+  dashState.data = null;
+  dashState.selectedBase = 'auto';
+  if (dashState.baseSelect) dashState.baseSelect.value = 'auto';
+  if (dashState.list) dashState.list.innerHTML = '';
+  if (dashState.summary) dashState.summary.textContent = 'Segments';
+  if (dashState.panel) dashState.panel.open = false;
+  if (dashState.panel) dashState.panel.style.display = 'none';
+}
+
+function removeMediaTemplateHandlers() {
+  dashState.mediaHandlers.forEach(({ span, handler }) => {
+    span.classList.remove('dash-template-link');
+    span.removeEventListener('click', handler);
+  });
+  dashState.mediaHandlers = [];
+}
+
+function decorateDashManifest(xmlText, manifestUrl) {
+  removeMediaTemplateHandlers();
+
+  const data = buildDashData(xmlText, manifestUrl);
+  if (!data || !data.contexts.length) {
+    cleanupDashDecorations();
+    return;
+  }
+
+  dashState.data = data;
+
+  ensureDashInspector();
+  if (dashState.panel) dashState.panel.style.display = 'block';
+  populateDashBaseOptions(data.baseOptions);
+  renderDashInspector();
+  if (dashState.panel) dashState.panel.open = false;
+  decorateSegmentTemplateSpans();
+}
+
+function ensureDashInspector() {
+  const codePanel = codeEl.closest('.code-panel');
+  if (!codePanel) return;
+
+  if (!dashState.panel) {
+    const panel = document.createElement('details');
+    panel.className = 'dash-inspector';
+    panel.open = false;
+
+    const summary = document.createElement('summary');
+    summary.className = 'dash-inspector-summary';
+    summary.textContent = 'Segments';
+    panel.appendChild(summary);
+
+    const body = document.createElement('div');
+    body.className = 'dash-inspector-body';
+
+    const toolbar = document.createElement('div');
+    toolbar.className = 'dash-toolbar';
+
+    const label = document.createElement('label');
+    label.textContent = 'Base URL:';
+    const select = document.createElement('select');
+    select.id = 'dash-base-select';
+    label.htmlFor = select.id;
+
+    toolbar.appendChild(label);
+    toolbar.appendChild(select);
+
+    const list = document.createElement('div');
+    list.className = 'dash-rep-list';
+
+    body.appendChild(toolbar);
+    body.appendChild(list);
+    panel.appendChild(body);
+
+    codePanel.insertBefore(panel, codePanel.firstChild);
+
+    body.addEventListener('click', (event) => {
+      if (maybeHandleManifestLinkClick(event)) event.preventDefault();
+    });
+
+    select.addEventListener('change', () => {
+      dashState.selectedBase = select.value;
+      renderDashInspector();
+    });
+
+    dashState.panel = panel;
+    dashState.summary = summary;
+    dashState.body = body;
+    dashState.toolbar = toolbar;
+    dashState.baseSelect = select;
+    dashState.list = list;
+  }
+}
+
+function populateDashBaseOptions(baseOptions) {
+  if (!dashState.baseSelect) return;
+  const select = dashState.baseSelect;
+  const prev = dashState.selectedBase || 'auto';
+  select.innerHTML = '';
+
+  const autoOption = document.createElement('option');
+  autoOption.value = 'auto';
+  autoOption.textContent = 'Auto (manifest)';
+  select.appendChild(autoOption);
+
+  baseOptions.forEach((opt) => {
+    const option = document.createElement('option');
+    option.value = opt.value;
+    option.textContent = opt.label;
+    select.appendChild(option);
+  });
+
+  if (prev && (prev === 'auto' || baseOptions.some((opt) => opt.value === prev))) {
+    select.value = prev;
+    dashState.selectedBase = prev;
+  } else {
+    select.value = 'auto';
+    dashState.selectedBase = 'auto';
+  }
+
+  if (dashState.toolbar) {
+    dashState.toolbar.style.display = baseOptions.length ? 'flex' : 'none';
+  }
+}
+
+function renderDashInspector() {
+  if (!dashState.panel || !dashState.list) return;
+  const data = dashState.data;
+  if (!data || !data.contexts.length) {
+    dashState.list.innerHTML = '';
+    if (dashState.summary) dashState.summary.textContent = 'Segments (0)';
+    dashState.panel.open = false;
+    return;
+  }
+
+  const contexts = data.contexts;
+  dashState.list.innerHTML = '';
+
+  const fragment = document.createDocumentFragment();
+  contexts.forEach((ctx, index) => {
+    const base = computeContextBase(ctx, data, dashState.selectedBase);
+    const details = document.createElement('details');
+    details.className = 'dash-rep';
+    details.dataset.ctxIndex = String(index);
+    if (index === 0) details.open = true;
+
+    const summary = document.createElement('summary');
+    const segmentCount = ctx.groups.reduce((sum, group) => sum + group.segments.length, 0);
+    summary.textContent = `${ctx.label} (${segmentCount} segment${segmentCount === 1 ? '' : 's'})`;
+    details.appendChild(summary);
+
+    if (ctx.initTemplate) {
+      const initUrl = resolveTemplateUrl(ctx.initTemplate, {
+        baseUrl: base,
+        representationId: ctx.representationId,
+        bandwidth: ctx.bandwidth,
+        number: ctx.startNumber,
+        time: 0,
+      });
+      if (initUrl) {
+        const initDiv = document.createElement('div');
+        initDiv.className = 'dash-init';
+        const initLink = document.createElement('a');
+        initLink.href = initUrl;
+        initLink.textContent = 'Initialization segment';
+        initLink.dataset.manifestLink = '1';
+        initLink.dataset.manifestTarget = initUrl;
+        initDiv.appendChild(initLink);
+        details.appendChild(initDiv);
+      }
+    }
+
+    const segmentsWrapper = document.createElement('div');
+    segmentsWrapper.className = 'dash-segment-list';
+
+    ctx.groups.forEach((group) => {
+      group.segments.forEach((seg) => {
+        const segmentUrl = resolveTemplateUrl(ctx.mediaTemplate, {
+          baseUrl: base,
+          representationId: ctx.representationId,
+          bandwidth: ctx.bandwidth,
+          number: seg.number,
+          time: seg.time,
+        });
+        if (!segmentUrl) return;
+        const item = document.createElement('div');
+        item.className = 'dash-segment-item';
+        const link = document.createElement('a');
+        link.href = segmentUrl;
+        link.textContent = `#${seg.number}`;
+        link.dataset.manifestLink = '1';
+        link.dataset.manifestTarget = segmentUrl;
+        item.appendChild(link);
+        if (Number.isFinite(seg.time)) {
+          const meta = document.createElement('span');
+          meta.className = 'dash-segment-meta';
+          meta.textContent = `t=${formatSegmentTime(seg.time, ctx.timescale)}`;
+          item.appendChild(meta);
+        }
+        segmentsWrapper.appendChild(item);
+      });
+    });
+
+    details.appendChild(segmentsWrapper);
+    fragment.appendChild(details);
+  });
+
+  dashState.list.appendChild(fragment);
+  if (dashState.summary) {
+    const totalSegments = contexts.reduce(
+      (sum, ctx) => sum + ctx.groups.reduce((inner, group) => inner + group.segments.length, 0),
+      0
+    );
+    dashState.summary.textContent = `Segments (${contexts.length} rep, ${totalSegments} segment${totalSegments === 1 ? '' : 's'})`;
+  }
+}
+
+function decorateSegmentTemplateSpans() {
+  if (!dashState.data) return;
+  const templateNodes = collectSegmentTemplateAttrNodes();
+  const contexts = dashState.data.contexts;
+  const count = Math.min(templateNodes.length, contexts.length);
+  for (let i = 0; i < count; i += 1) {
+    const info = templateNodes[i];
+    const mediaSpan = info.attrs.media;
+    if (!mediaSpan) continue;
+    const handler = (event) => {
+      event.preventDefault();
+      openDashRepresentation(i);
+    };
+    mediaSpan.classList.add('dash-template-link');
+    mediaSpan.title = 'Click to view segments';
+    mediaSpan.addEventListener('click', handler);
+    dashState.mediaHandlers.push({ span: mediaSpan, handler });
+  }
+}
+
+function openDashRepresentation(index) {
+  if (!dashState.list) return;
+  const details = dashState.list.querySelector(`details[data-ctx-index="${index}"]`);
+  if (!details) {
+    renderDashInspector();
+  }
+  const target = dashState.list.querySelector(`details[data-ctx-index="${index}"]`);
+  if (!target) return;
+  if (dashState.panel) dashState.panel.open = true;
+  target.open = true;
+  target.classList.add('dash-rep--highlight');
+  target.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  setTimeout(() => target.classList.remove('dash-rep--highlight'), 800);
+}
+
+function collectSegmentTemplateAttrNodes() {
+  const tagSpans = Array.from(codeEl.querySelectorAll('.token.tag')).filter((span) => span.textContent === 'SegmentTemplate');
+  return tagSpans.map((tagSpan) => {
+    const attrs = {};
+    let node = tagSpan.nextSibling;
+    while (node) {
+      if (node.nodeType === Node.TEXT_NODE && node.textContent.includes('>')) break;
+      if (node.nodeType === Node.ELEMENT_NODE) {
+        if (node.classList.contains('token') && node.classList.contains('attr-name')) {
+          const name = node.textContent;
+          const valueSpan = findNextAttrValueSpan(node);
+          if (valueSpan) attrs[name] = valueSpan;
+        }
+      }
+      node = node.nextSibling;
+    }
+    return { templateSpan: tagSpan, attrs };
+  });
+}
+
+function findNextAttrValueSpan(attrNameSpan) {
+  let node = attrNameSpan.nextSibling;
+  while (node) {
+    if (node.nodeType === Node.ELEMENT_NODE && node.classList.contains('token') && node.classList.contains('attr-value')) {
+      return node;
+    }
+    node = node.nextSibling;
+  }
+  return null;
+}
+
+function computeContextBase(ctx, data, selectedBase) {
+  let base = selectedBase === 'auto' ? ctx.autoBase : selectedBase;
+  if (!base) base = data.manifestBase;
+  ctx.baseParts.forEach((part) => {
+    base = resolveAgainstBase(base, part);
+  });
+  return base;
+}
+
+function buildDashData(xmlText, manifestUrl) {
+  let doc;
+  try {
+    doc = new DOMParser().parseFromString(xmlText, 'application/xml');
+  } catch {
+    return null;
+  }
+  if (!doc || doc.getElementsByTagName('parsererror').length) return null;
+
+  const mpd = doc.documentElement;
+  if (!mpd) return null;
+
+  const manifestBase = deriveManifestBase(manifestUrl);
+
+  const baseOptions = [];
+  const seenBase = new Set();
+  Array.from(mpd.children || []).forEach((child) => {
+    if (child.localName === 'BaseURL') {
+      const text = (child.textContent || '').trim();
+      if (!text) return;
+      const resolved = resolveAgainstBase(manifestBase, text);
+      if (seenBase.has(resolved)) return;
+      seenBase.add(resolved);
+      const service = child.getAttribute('serviceLocation');
+      const label = service ? `${service} (${resolved})` : resolved;
+      baseOptions.push({ value: resolved, label });
+    }
+  });
+
+  const contexts = [];
+  const templates = collectElementsByLocalName(mpd, 'SegmentTemplate');
+  templates.forEach((templateEl) => {
+    const ctx = createSegmentTemplateContext(templateEl, manifestBase, mpd);
+    if (ctx) contexts.push(ctx);
+  });
+
+  if (!contexts.length) return { manifestBase, baseOptions: [], contexts: [] };
+
+  return { manifestBase, baseOptions, contexts };
+}
+
+function createSegmentTemplateContext(templateEl, manifestBase, mpdEl) {
+  const representation = findAncestorByLocalName(templateEl, 'Representation');
+  if (!representation) return null;
+
+  const mediaTemplate = getTemplateAttribute(templateEl, 'media');
+  if (!mediaTemplate) return null;
+
+  const initTemplate = getTemplateAttribute(templateEl, 'initialization');
+  const startNumber = parsePositiveInt(getTemplateAttribute(templateEl, 'startNumber')) || 1;
+  const timescale = parsePositiveInt(getTemplateAttribute(templateEl, 'timescale'));
+  const ptoRaw = getTemplateAttribute(templateEl, 'presentationTimeOffset');
+  const pto = Number.parseInt(ptoRaw || '0', 10);
+
+  const baseParts = [];
+  const period = findAncestorByLocalName(templateEl, 'Period');
+  const adaptation = findAncestorByLocalName(templateEl, 'AdaptationSet');
+
+  const mpdBase = getPrimaryBaseUrl(mpdEl);
+  const periodBase = getPrimaryBaseUrl(period);
+  const adaptationBase = getPrimaryBaseUrl(adaptation);
+  const representationBase = getPrimaryBaseUrl(representation);
+  const templateBase = getPrimaryBaseUrl(templateEl);
+
+  if (periodBase) baseParts.push(periodBase);
+  if (adaptationBase) baseParts.push(adaptationBase);
+  if (representationBase) baseParts.push(representationBase);
+  if (templateBase) baseParts.push(templateBase);
+
+  const autoBase = mpdBase ? resolveAgainstBase(manifestBase, mpdBase) : manifestBase;
+
+  const contentType = (adaptation && adaptation.getAttribute('contentType')) || '';
+  const width = representation.getAttribute('width');
+  const height = representation.getAttribute('height');
+  const bandwidth = representation.getAttribute('bandwidth');
+  const repId = representation.getAttribute('id');
+  const codec = (representation.getAttribute('codecs') || '').trim();
+  const langAttr = (adaptation && adaptation.getAttribute('lang')) || representation.getAttribute('lang') || '';
+  const adaptationLabel = getChildText(adaptation, 'Label');
+  let languageLabel = '';
+  if (adaptationLabel && langAttr) languageLabel = `${adaptationLabel} (${langAttr})`;
+  else if (adaptationLabel) languageLabel = adaptationLabel;
+  else if (langAttr) languageLabel = langAttr;
+
+  const labelParts = [];
+  if (contentType) labelParts.push(contentType);
+  if (languageLabel) labelParts.push(languageLabel);
+  if (width && height) labelParts.push(`${width}x${height}`);
+  if (codec) labelParts.push(codec);
+  if (bandwidth) {
+    const bwNumber = Number.parseInt(bandwidth, 10);
+    labelParts.push(Number.isFinite(bwNumber) ? `${bwNumber.toLocaleString()}bps` : `${bandwidth}bps`);
+  }
+  if (repId) labelParts.push(`id=${repId}`);
+  const label = labelParts.length ? labelParts.join(' · ') : 'Representation';
+
+  const timelineEl = findFirstChildByLocalName(templateEl, 'SegmentTimeline');
+  const groups = expandSegmentGroups(timelineEl, startNumber, Number.isFinite(pto) ? pto : 0);
+
+  return {
+    label,
+    representationId: repId || '',
+    bandwidth: bandwidth || '',
+    mediaTemplate,
+    initTemplate,
+    startNumber,
+    timescale: timescale || null,
+    autoBase,
+    baseParts,
+    groups,
+    codec,
+    languageLabel,
+    contentType
+  };
+}
+
+function expandSegmentGroups(timelineEl, startNumber, timelineStart) {
+  const groups = [];
+  if (!timelineEl) return groups;
+
+  const sNodes = collectElementsByLocalName(timelineEl, 'S');
+  if (!sNodes.length) return groups;
+
+  let segmentNumber = startNumber;
+  let currentTime = timelineStart || 0;
+
+  sNodes.forEach((sNode) => {
+    const duration = parsePositiveInt(sNode.getAttribute('d'));
+    if (!duration) {
+      groups.push({ segments: [] });
+      return;
+    }
+
+    const repeatCount = parseRepeatCount(sNode.getAttribute('r'));
+
+    const timeAttr = sNode.getAttribute('t');
+    if (timeAttr !== null) {
+      const parsedTime = Number.parseInt(timeAttr, 10);
+      if (Number.isFinite(parsedTime)) currentTime = parsedTime;
+    }
+
+    const group = { segments: [] };
+    for (let i = 0; i < repeatCount; i += 1) {
+      const segTime = currentTime + i * duration;
+      group.segments.push({ number: segmentNumber, time: segTime, duration });
+      segmentNumber += 1;
+    }
+
+    currentTime += repeatCount * duration;
+    groups.push(group);
+  });
+
+  return groups;
+}
+
+function parseRepeatCount(value) {
+  if (value === null || value === undefined) return 1;
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed)) return 1;
+  if (parsed < 0) return 1;
+  return parsed + 1;
+}
+
+function getPrimaryBaseUrl(element) {
+  if (!element) return '';
+  for (let i = 0; i < element.children.length; i += 1) {
+    const child = element.children[i];
+    if (child.localName === 'BaseURL') {
+      const text = (child.textContent || '').trim();
+      if (text) return text;
+    }
+  }
+  return '';
+}
+
+function collectElementsByLocalName(root, localName) {
+  const results = [];
+  if (!root) return results;
+  const stack = [root];
+  while (stack.length) {
+    const node = stack.pop();
+    if (node.nodeType === Node.ELEMENT_NODE) {
+      if (node.localName === localName) results.push(node);
+      for (let i = node.children.length - 1; i >= 0; i -= 1) stack.push(node.children[i]);
+    }
+  }
+  return results;
+}
+
+function findFirstChildByLocalName(node, localName) {
+  if (!node) return null;
+  for (let i = 0; i < node.children.length; i += 1) {
+    const child = node.children[i];
+    if (child.localName === localName) return child;
+  }
+  return null;
+}
+
+function findAncestorByLocalName(node, localName) {
+  let current = node ? node.parentElement : null;
+  while (current) {
+    if (current.localName === localName) return current;
+    current = current.parentElement;
+  }
+  return null;
+}
+
+function getChildText(element, localName) {
+  if (!element) return '';
+  for (let i = 0; i < element.children.length; i += 1) {
+    const child = element.children[i];
+    if (child.localName === localName) {
+      const text = (child.textContent || '').trim();
+      if (text) return text;
+    }
+  }
+  return '';
+}
+
+function deriveManifestBase(manifestUrl) {
+  try {
+    const url = new URL(manifestUrl);
+    url.hash = '';
+    url.search = '';
+    url.pathname = url.pathname.replace(/[^/]*$/, '');
+    return url.href;
+  } catch {
+    return manifestUrl;
+  }
+}
+
+function resolveAgainstBase(base, relative) {
+  try {
+    return new URL(relative, base).href;
+  } catch {
+    return relative;
+  }
+}
+
+function getTemplateAttribute(templateEl, attr) {
+  if (templateEl.hasAttribute(attr)) return templateEl.getAttribute(attr);
+  let ancestor = findAncestorByLocalName(templateEl, 'SegmentTemplate');
+  while (ancestor) {
+    if (ancestor.hasAttribute(attr)) return ancestor.getAttribute(attr);
+    ancestor = findAncestorByLocalName(ancestor, 'SegmentTemplate');
+  }
+  return '';
+}
+
+function parsePositiveInt(value) {
+  if (value === null || value === undefined) return null;
+  const num = Number.parseInt(value, 10);
+  if (!Number.isFinite(num) || num <= 0) return null;
+  return num;
+}
+
+function resolveTemplateUrl(template, { baseUrl, representationId, bandwidth, number, time }) {
+  if (!template) return null;
+  const replaced = template.replace(/\$(RepresentationID|Bandwidth|Number|Time)(%0\d+d)?\$/g, (_match, token, format) => {
+    let value = '';
+    switch (token) {
+      case 'RepresentationID':
+        value = representationId || '';
+        break;
+      case 'Bandwidth':
+        value = bandwidth || '';
+        break;
+      case 'Number':
+        value = Number.isFinite(number) ? number : '';
+        break;
+      case 'Time':
+        value = Number.isFinite(time) ? time : '';
+        break;
+      default:
+        value = '';
+    }
+    if (format) {
+      const widthMatch = /%0(\d+)d/.exec(format);
+      if (widthMatch) {
+        const width = Number.parseInt(widthMatch[1], 10);
+        if (Number.isFinite(width)) {
+          value = String(value).padStart(width, '0');
+        }
+      }
+    }
+    return value;
+  });
+  return resolveAgainstBase(baseUrl, replaced);
+}
+
+
+function formatSegmentTime(time, timescale) {
+  if (!Number.isFinite(time)) return '';
+  if (!timescale || !Number.isFinite(timescale) || timescale <= 0) return time.toString();
+  const seconds = time / timescale;
+  if (!Number.isFinite(seconds)) return time.toString();
+  if (seconds >= 1) return `${seconds.toFixed(3).replace(/\.?0+$/, '')}s`;
+  return `${(seconds * 1000).toFixed(1).replace(/\.?0+$/, '')}ms`;
 }
 
 function highlightHLS(text, baseUrl) {
@@ -262,9 +885,9 @@ async function fetchWithOptionalUA(url, ua) {
   const t0 = performance.now();
   const r = await fetch(url, { credentials: 'omit', cache: 'no-store' });
   const ct = r.headers.get('content-type') || '';
-  const text = await r.text();
+  const buffer = await r.arrayBuffer();
   const t1 = performance.now();
-  return { status: r.status, contentType: ct, text, durationMs: t1 - t0 };
+  return { status: r.status, contentType: ct, buffer, durationMs: t1 - t0 };
 }
 
 function renderMeta({ status, contentType, bytes, mode, durationMs }) {
@@ -282,67 +905,214 @@ function renderMeta({ status, contentType, bytes, mode, durationMs }) {
   add('Response time', `${formatDuration(durationMs)}`);
 }
 
+function updateBackButton() {
+  if (!backBtn) return;
+  const hasHistory = navigationStack.length > 0;
+  backBtn.style.display = hasHistory ? 'inline-flex' : 'none';
+  backBtn.disabled = !hasHistory;
+}
 
-async function load() {
+function pushCurrentState() {
+  if (!hasLoadedManifest || !lastLoadedUrl) return;
+  const top = navigationStack[navigationStack.length - 1];
+  if (top && top.url === lastLoadedUrl && top.mode === lastLoadedMode) return;
+  const snapshot = {
+    url: lastLoadedUrl,
+    text: lastLoadedText,
+    buffer: lastLoadedBuffer ? lastLoadedBuffer.slice(0) : null,
+    mode: lastLoadedMode,
+    contentType: lastLoadedContentType,
+    meta: lastResponseMeta ? { ...lastResponseMeta } : null,
+    selectedMode: modeSelect.value,
+  };
+  navigationStack.push(snapshot);
+  updateBackButton();
+}
+
+function renderLoadedView({ mode, text, buffer, url, contentType, meta }) {
+  cleanupDashDecorations();
+  if (mode === 'dash') {
+    codeEl.className = 'language-plain';
+    codeEl.innerHTML = highlightDASH(text, url);
+    decorateDashManifest(text, url);
+  } else if (mode === 'hls') {
+    codeEl.className = 'language-plain';
+    codeEl.innerHTML = highlightHLS(text, url);
+  } else if (mode === 'json') {
+    codeEl.className = 'language-json';
+    codeEl.innerHTML = highlightJSON(text);
+  } else if (mode === 'mp4' || mode === 'segments') {
+    const bufView =
+      buffer instanceof Uint8Array
+        ? buffer
+        : buffer instanceof ArrayBuffer
+        ? new Uint8Array(buffer)
+        : null;
+    if (bufView) {
+      renderMp4View(bufView, url);
+    } else {
+      codeEl.className = 'language-plain';
+      codeEl.textContent = 'Segment data unavailable.';
+    }
+  } else {
+    codeEl.className = 'language-plain';
+    codeEl.innerHTML = escapeHTML(text || '');
+  }
+
+  if (meta) {
+    renderMeta(meta);
+    lastResponseMeta = { ...meta };
+  } else {
+    metaEl.innerHTML = '';
+    lastResponseMeta = null;
+  }
+
+  updateActionButtons(mode);
+}
+
+function restoreSnapshot(snapshot) {
+  if (!snapshot) return;
+  urlInput.value = snapshot.url || '';
+  const appliedMode = snapshot.mode === 'segments' ? 'segments' : snapshot.selectedMode || 'auto';
+  modeSelect.value = appliedMode;
+  hasLoadedManifest = true;
+  lastLoadedUrl = snapshot.url;
+  lastLoadedText = snapshot.text || '';
+  lastLoadedBuffer = snapshot.buffer ? snapshot.buffer.slice(0) : null;
+  lastLoadedMode = snapshot.mode || 'auto';
+  lastLoadedContentType = snapshot.contentType || '';
+  lastResponseMeta = snapshot.meta ? { ...snapshot.meta } : null;
+  renderLoadedView({
+    mode: lastLoadedMode,
+    text: lastLoadedText,
+    buffer: lastLoadedBuffer,
+    url: lastLoadedUrl,
+    contentType: lastLoadedContentType,
+    meta: lastResponseMeta,
+  });
+}
+
+function updateActionButtons(mode) {
+  const isBinary = mode === 'mp4' || mode === 'segments';
+  if (isBinary) {
+    copyManifestBtn.setAttribute('disabled', 'true');
+    copyManifestBtn.title = 'Copying text is not available for MP4/fragmented segment data.';
+  } else {
+    copyManifestBtn.removeAttribute('disabled');
+    copyManifestBtn.title = '';
+  }
+  copyManifestBtn.textContent = '⧉ Copy Manifest as text';
+  copyManifestUrlBtn.textContent = isBinary ? '⧉ Copy Segment URL' : '⧉ Copy Manifest URL';
+  downloadManifestBtn.textContent = isBinary ? '⇣ Download Segment' : '⇣ Download Manifest';
+}
+
+
+async function load(options = {}) {
   const url = urlInput.value.trim();
   if (!url) return;
   const ua = uaInput.value.trim();
+  const previousUrl = lastLoadedUrl;
+  const previousMode = lastLoadedMode;
+  const hadPrevious = hasLoadedManifest;
   try {
     codeEl.textContent = 'Loading…';
-    hasLoadedManifest = false;
-    lastLoadedUrl = '';
-    lastLoadedText = '';
+    codeEl.className = 'language-plain';
     copyManifestBtn.textContent = '⧉ Copy Manifest as text';
+    copyManifestBtn.removeAttribute('disabled');
+    copyManifestBtn.title = '';
     copyManifestUrlBtn.textContent = '⧉ Copy Manifest URL';
-    const { status, contentType, text, durationMs } = await fetchWithOptionalUA(url, ua);
-    const mode = detectMode(url, text, contentType);
+    downloadManifestBtn.textContent = '⇣ Download Manifest';
+    updateActionButtons(null);
+    const { status, contentType, buffer, durationMs } = await fetchWithOptionalUA(url, ua);
+    lastLoadedContentType = contentType;
+    const byteArray = new Uint8Array(buffer);
+    const selectedMode = modeSelect.value;
+    let mode = selectedMode;
+    let text = '';
+
+    if (selectedMode === 'auto') {
+      if (isLikelyMp4(url, contentType, byteArray)) {
+        mode = 'mp4';
+      } else {
+        const decoder = new TextDecoder('utf-8', { fatal: false });
+        text = decoder.decode(byteArray);
+        mode = detectMode(url, text, contentType);
+      }
+    } else if (selectedMode === 'segments' || selectedMode === 'mp4') {
+      mode = selectedMode === 'segments' ? 'segments' : 'mp4';
+    } else {
+      const decoder = new TextDecoder('utf-8', { fatal: false });
+      text = decoder.decode(byteArray);
+      mode = selectedMode;
+    }
+
+    let shouldPushHistory = options.pushHistory || false;
+    if (!shouldPushHistory && hadPrevious) {
+      if (previousUrl !== url || previousMode !== mode) {
+        shouldPushHistory = true;
+      }
+    }
+    if (shouldPushHistory) pushCurrentState();
 
     lastLoadedUrl = url;
     lastLoadedText = text;
+    lastLoadedBuffer = buffer;
+    lastLoadedMode = mode;
     hasLoadedManifest = true;
 
-    let html;
-    if (mode === 'dash') {
-      html = highlightDASH(text, url);
-      codeEl.className = 'language-plain';
-    } else if (mode === 'hls') {
-      html = highlightHLS(text, url);
-      codeEl.className = 'language-plain';
-    } else if (mode === 'json') {
-      html = highlightJSON(text);
-      codeEl.className = 'language-json';
-    } else {
-      html = escapeHTML(text);
-      codeEl.className = 'language-plain';
-    }
-
-    codeEl.innerHTML = html;
-    renderMeta({
+    const meta = {
       status,
       contentType,
-      bytes: new Blob([text]).size,
+      bytes: byteArray.length,
       mode,
-      durationMs
+      durationMs,
+    };
+    renderLoadedView({
+      mode,
+      text,
+      buffer,
+      url,
+      contentType,
+      meta,
     });
+
     chrome.storage.sync.set({ customUA: ua });
   } catch (e) {
     codeEl.textContent = 'Error: ' + (e && e.message ? e.message : String(e));
     hasLoadedManifest = false;
     lastLoadedUrl = '';
     lastLoadedText = '';
+    lastLoadedBuffer = null;
+    lastLoadedMode = 'auto';
+    lastLoadedContentType = '';
+    lastResponseMeta = null;
+    updateActionButtons(null);
+    cleanupDashDecorations();
   }
+  updateBackButton();
 }
 
 
-refreshBtn.addEventListener('click', load);
+refreshBtn.addEventListener('click', () => load());
 
 copyManifestBtn.addEventListener('click', async () => {
+  if (copyManifestBtn.disabled || lastLoadedMode === 'mp4' || lastLoadedMode === 'segments') {
+    alert('Copying text is not available for MP4/fragmented segment data.');
+    return;
+  }
   if (!hasLoadedManifest) {
     alert('Load a manifest first.');
     return;
   }
   try {
-    const plain = codeEl.innerText; // innerText preserves newlines
+    let plain = lastLoadedText;
+    if (!plain) {
+      plain = codeEl.innerText; // fallback; innerText preserves newlines
+    }
+    if (!plain) {
+      alert('Nothing to copy yet.');
+      return;
+    }
     await navigator.clipboard.writeText(plain);
     copyManifestBtn.textContent = '✓ Copied';
     setTimeout(() => (copyManifestBtn.textContent = '⧉ Copy Manifest as text'), 1200);
@@ -356,7 +1126,13 @@ downloadManifestBtn.addEventListener('click', () => {
     alert('Load a manifest first.');
     return;
   }
-  const blob = new Blob([lastLoadedText], { type: 'text/plain;charset=utf-8' });
+  let blob;
+  if ((lastLoadedMode === 'mp4' || lastLoadedMode === 'segments') && lastLoadedBuffer) {
+    const type = lastLoadedContentType || 'video/mp4';
+    blob = new Blob([lastLoadedBuffer], { type });
+  } else {
+    blob = new Blob([lastLoadedText], { type: 'text/plain;charset=utf-8' });
+  }
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   let filename = 'manifest.txt';
@@ -369,8 +1145,9 @@ downloadManifestBtn.addEventListener('click', () => {
       // keep default filename
     }
   }
+  if (!filename) filename = (lastLoadedMode === 'mp4' || lastLoadedMode === 'segments') ? 'segment.mp4' : 'manifest.txt';
   link.href = url;
-  link.download = filename || 'manifest.txt';
+  link.download = filename;
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
@@ -385,7 +1162,10 @@ copyManifestUrlBtn.addEventListener('click', async () => {
   try {
     await navigator.clipboard.writeText(lastLoadedUrl);
     copyManifestUrlBtn.textContent = '✓ URL Copied';
-    setTimeout(() => (copyManifestUrlBtn.textContent = '⧉ Copy Manifest URL'), 1200);
+    setTimeout(() => {
+      copyManifestUrlBtn.textContent =
+        (lastLoadedMode === 'mp4' || lastLoadedMode === 'segments') ? '⧉ Copy Segment URL' : '⧉ Copy Manifest URL';
+    }, 1200);
   } catch (e) {
     alert('Copy failed: ' + e.message);
   }
@@ -395,18 +1175,805 @@ urlInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') load(); });
 uaInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') load(); });
 
 codeEl.addEventListener('click', (event) => {
-  const link = event.target.closest('a[data-manifest-link="1"]');
-  if (!link) return;
-  if (event.defaultPrevented) return;
-  if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+  if (maybeHandleManifestLinkClick(event)) event.preventDefault();
+});
+
+if (backBtn) {
+  backBtn.addEventListener('click', () => {
+    if (!navigationStack.length) return;
+    const snapshot = navigationStack.pop();
+    restoreSnapshot(snapshot);
+    updateBackButton();
+  });
+  updateBackButton();
+}
+
+function maybeHandleManifestLinkClick(event) {
+  const link = event.target.closest && event.target.closest('a[data-manifest-link="1"]');
+  if (!link) return false;
+  if (event.defaultPrevented) return false;
+  if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return false;
   const targetAttr = link.getAttribute('data-manifest-target');
   const href = targetAttr ? decodeHTML(targetAttr) : link.href || link.getAttribute('href');
-  if (!href) return;
-  event.preventDefault();
+  if (!href) return false;
   urlInput.value = href;
   modeSelect.value = 'auto';
-  load();
-});
+  load({ pushHistory: true });
+  return true;
+}
+
+const MP4_CONTAINER_BOXES = new Set([
+  'moov',
+  'trak',
+  'mdia',
+  'minf',
+  'stbl',
+  'edts',
+  'mvex',
+  'moof',
+  'traf',
+  'mfra',
+  'udta',
+  'meta',
+  'ilst',
+  'dinf',
+  'tref',
+  'sinf',
+  'schi',
+  'ipro',
+  'meco',
+  'mere',
+  'strk',
+  'strd',
+  'stri',
+  'dref'
+]);
+
+const MP4_EPOCH_OFFSET = 2082844800n;
+
+function renderMp4View(byteArray, url) {
+  const bytes = byteArray instanceof Uint8Array ? byteArray : new Uint8Array(byteArray);
+  const { boxes, warnings } = parseMp4Structure(bytes);
+
+  codeEl.className = 'mp4-view';
+  const wrapper = document.createElement('div');
+  wrapper.className = 'mp4-viewer';
+
+  const header = document.createElement('div');
+  header.className = 'mp4-viewer-header';
+
+  const urlLink = document.createElement('a');
+  urlLink.href = url;
+  urlLink.textContent = url;
+  urlLink.target = '_blank';
+  urlLink.rel = 'noopener noreferrer';
+  header.appendChild(urlLink);
+
+  const count = document.createElement('span');
+  count.className = 'mp4-header-meta';
+  count.textContent = `${boxes.length} top-level box${boxes.length === 1 ? '' : 'es'}`;
+  header.appendChild(count);
+
+  wrapper.appendChild(header);
+
+  if (warnings.length) {
+    const warningEl = document.createElement('div');
+    warningEl.className = 'mp4-warning';
+    warningEl.textContent = warnings.join(' • ');
+    wrapper.appendChild(warningEl);
+  }
+
+  const main = document.createElement('div');
+  main.className = 'mp4-viewer-main';
+
+  const tree = document.createElement('div');
+  tree.className = 'mp4-tree';
+
+  const details = document.createElement('div');
+  details.className = 'mp4-details';
+  details.innerHTML = '<div class="mp4-placeholder">Select a box to see its fields.</div>';
+
+  main.appendChild(tree);
+  main.appendChild(details);
+  wrapper.appendChild(main);
+
+  codeEl.replaceChildren(wrapper);
+
+  if (!boxes.length) {
+    tree.innerHTML = '<div class="mp4-placeholder">No ISO BMFF boxes detected in this resource.</div>';
+    return;
+  }
+
+  const boxesById = new Map();
+  (function register(list) {
+    list.forEach((box) => {
+      boxesById.set(box.id, box);
+      if (box.children && box.children.length) register(box.children);
+    });
+  })(boxes);
+
+  function buildTree(list, depth) {
+    const frag = document.createDocumentFragment();
+    list.forEach((box) => {
+      const group = document.createElement('div');
+      group.className = 'mp4-tree-group';
+      group.dataset.boxId = box.id;
+
+      const row = document.createElement('div');
+      row.className = 'mp4-tree-row';
+      row.dataset.boxId = box.id;
+      row.style.paddingLeft = `${depth * 16}px`;
+
+      const toggle = document.createElement('button');
+      toggle.className = 'mp4-toggle';
+      toggle.dataset.action = 'toggle';
+      toggle.dataset.boxId = box.id;
+      toggle.setAttribute('aria-expanded', 'false');
+      if (box.children && box.children.length) {
+        toggle.textContent = '▸';
+      } else {
+        toggle.textContent = '';
+        toggle.disabled = true;
+        toggle.classList.add('mp4-toggle--empty');
+      }
+      row.appendChild(toggle);
+
+      const typeSpan = document.createElement('span');
+      typeSpan.className = 'mp4-node-type';
+      typeSpan.textContent = box.type;
+      row.appendChild(typeSpan);
+
+      const sizeSpan = document.createElement('span');
+      sizeSpan.className = 'mp4-node-size';
+      sizeSpan.textContent = `${box.size.toLocaleString()} bytes`;
+      row.appendChild(sizeSpan);
+
+      const offsetSpan = document.createElement('span');
+      offsetSpan.className = 'mp4-node-offset';
+      offsetSpan.textContent = `@${box.start}`;
+      row.appendChild(offsetSpan);
+
+      group.appendChild(row);
+
+      if (box.children && box.children.length) {
+        const childContainer = document.createElement('div');
+        childContainer.className = 'mp4-children';
+        childContainer.dataset.parentId = box.id;
+        childContainer.hidden = true;
+        childContainer.appendChild(buildTree(box.children, depth + 1));
+        group.appendChild(childContainer);
+      }
+
+      frag.appendChild(group);
+    });
+    return frag;
+  }
+
+  tree.appendChild(buildTree(boxes, 0));
+
+  let selectedRow = null;
+
+  function toggleBox(boxId, forceOpen) {
+    const group = tree.querySelector(`.mp4-tree-group[data-box-id="${boxId}"]`);
+    if (!group) return;
+    const childContainer = group.querySelector(':scope > .mp4-children');
+    if (!childContainer) return;
+    const toggle = group.querySelector(':scope > .mp4-tree-row .mp4-toggle');
+    const shouldOpen = forceOpen !== undefined ? forceOpen : childContainer.hidden;
+    childContainer.hidden = !shouldOpen;
+    if (toggle) {
+      toggle.textContent = shouldOpen ? '▾' : '▸';
+      toggle.setAttribute('aria-expanded', String(shouldOpen));
+    }
+  }
+
+  function openAncestors(box) {
+    let current = box;
+    while (current && current.parentId) {
+      toggleBox(current.parentId, true);
+      current = boxesById.get(current.parentId);
+    }
+  }
+
+  function renderDetails(box) {
+    details.innerHTML = '';
+    const title = document.createElement('h3');
+    title.textContent = `${box.type} box`;
+    details.appendChild(title);
+
+    const table = document.createElement('table');
+    const tbody = document.createElement('tbody');
+
+    const rows = [
+      { name: 'type', value: `'${box.type}'` },
+      { name: 'size', value: `${box.size.toLocaleString()} bytes` },
+      { name: 'start', value: box.start },
+      { name: 'end', value: box.end }
+    ];
+    if (box.uuid) rows.push({ name: 'uuid', value: box.uuid });
+    box.details.forEach((detail) => rows.push(detail));
+
+    rows.forEach(({ name, value }) => {
+      const tr = document.createElement('tr');
+      const th = document.createElement('th');
+      th.textContent = name;
+      const td = document.createElement('td');
+      td.textContent = formatDetailDisplay(value);
+      tr.appendChild(th);
+      tr.appendChild(td);
+      tbody.appendChild(tr);
+    });
+
+    table.appendChild(tbody);
+    details.appendChild(table);
+  }
+
+  function selectBox(boxId) {
+    const box = boxesById.get(boxId);
+    if (!box) return;
+    openAncestors(box);
+    const row = tree.querySelector(`.mp4-tree-row[data-box-id="${boxId}"]`);
+    if (!row) return;
+    if (selectedRow) selectedRow.classList.remove('selected');
+    row.classList.add('selected');
+    selectedRow = row;
+    renderDetails(box);
+  }
+
+  tree.addEventListener('click', (event) => {
+    const toggleBtn = event.target.closest('button[data-action="toggle"]');
+    if (toggleBtn) {
+      event.stopPropagation();
+      toggleBox(toggleBtn.dataset.boxId);
+      return;
+    }
+    const row = event.target.closest('.mp4-tree-row');
+    if (!row) return;
+    selectBox(row.dataset.boxId);
+  });
+
+  const first = boxes[0];
+  if (first) {
+    selectBox(first.id);
+    if (first.children && first.children.length) {
+      toggleBox(first.id, true);
+    }
+  }
+}
+
+function parseMp4Structure(bytes) {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const warnings = [];
+  let idCounter = 0;
+
+  function parseRange(start, end, parentId) {
+    const items = [];
+    let offset = start;
+    while (offset + 8 <= end) {
+      let size = view.getUint32(offset);
+      let headerSize = 8;
+      let type = fourCC(bytes, offset + 4);
+
+      if (!type.trim()) break;
+
+      if (size === 1) {
+        if (offset + 16 > end) {
+          warnings.push(`Large box size declared at ${offset} exceeds buffer length.`);
+          break;
+        }
+        size = Number(readUint64(view, offset + 8));
+        headerSize = 16;
+      } else if (size === 0) {
+        size = end - offset;
+      }
+
+      if (size < headerSize) {
+        warnings.push(`Invalid size for box ${type} at offset ${offset}.`);
+        break;
+      }
+
+      let boxEnd = offset + size;
+      if (boxEnd > end) {
+        warnings.push(`Box ${type} at offset ${offset} truncated (expected ${size} bytes).`);
+        boxEnd = end;
+        size = boxEnd - offset;
+      }
+
+      if (size <= 0) break;
+
+      let uuid = null;
+      if (type === 'uuid') {
+        if (offset + headerSize + 16 <= boxEnd) {
+          const uuidBytes = bytes.subarray(offset + headerSize, offset + headerSize + 16);
+          uuid = formatUuid(uuidBytes);
+          headerSize += 16;
+        } else {
+          warnings.push(`UUID box at offset ${offset} missing identifier bytes.`);
+        }
+      }
+
+      const box = {
+        id: `box-${idCounter++}`,
+        type,
+        start: offset,
+        size,
+        end: offset + size,
+        headerSize,
+        uuid,
+        parentId,
+        children: [],
+        details: []
+      };
+
+      const payloadOffset = offset + headerSize;
+      const payloadSize = Math.max(0, box.end - payloadOffset);
+
+      const { details, childOffset } = extractBoxDetails(box, view, bytes, payloadOffset, payloadSize, warnings);
+      box.details = details;
+
+      const childStart = payloadOffset + Math.min(childOffset, payloadSize);
+      if (MP4_CONTAINER_BOXES.has(type) && childStart + 8 <= box.end) {
+        box.children = parseRange(childStart, box.end, box.id);
+      }
+
+      items.push(box);
+      offset += size;
+    }
+    return items;
+  }
+
+  const boxes = parseRange(0, bytes.length, null);
+  return { boxes, warnings };
+}
+
+function extractBoxDetails(box, view, bytes, payloadOffset, payloadSize, warnings) {
+  const details = [];
+  let cursor = payloadOffset;
+  let remaining = payloadSize;
+  let childOffset = 0;
+
+  const addDetail = (name, value) => {
+    if (value === null || value === undefined || value === '') return;
+    details.push({ name, value });
+  };
+
+  const ensure = (len) => remaining >= len;
+  const skipBytes = (len) => {
+    if (!ensure(len)) {
+      cursor = payloadOffset + payloadSize;
+      remaining = 0;
+      return false;
+    }
+    cursor += len;
+    remaining -= len;
+    return true;
+  };
+  const readUint8 = () => {
+    if (!ensure(1)) return null;
+    const val = view.getUint8(cursor);
+    cursor += 1;
+    remaining -= 1;
+    return val;
+  };
+  const readUint16 = () => {
+    if (!ensure(2)) return null;
+    const val = view.getUint16(cursor);
+    cursor += 2;
+    remaining -= 2;
+    return val;
+  };
+  const readUint32 = () => {
+    if (!ensure(4)) return null;
+    const val = view.getUint32(cursor);
+    cursor += 4;
+    remaining -= 4;
+    return val;
+  };
+  const readInt32 = () => {
+    if (!ensure(4)) return null;
+    const val = view.getInt32(cursor);
+    cursor += 4;
+    remaining -= 4;
+    return val;
+  };
+  const readUint64Val = () => {
+    if (!ensure(8)) return null;
+    const val = readUint64(view, cursor);
+    cursor += 8;
+    remaining -= 8;
+    return val;
+  };
+  const readString = (len) => {
+    if (!ensure(len)) return '';
+    const slice = bytes.subarray(cursor, cursor + len);
+    cursor += len;
+    remaining -= len;
+    let result = '';
+    for (let i = 0; i < slice.length; i++) {
+      if (slice[i] === 0) {
+        result = String.fromCharCode(...slice.subarray(0, i));
+        break;
+      }
+    }
+    if (!result) result = String.fromCharCode(...slice);
+    return result.replace(/\u0000+$/, '');
+  };
+
+  const markChildOffset = () => {
+    childOffset = Math.max(childOffset, cursor - payloadOffset);
+  };
+
+  const readFullBoxHeader = () => {
+    if (!ensure(4)) return null;
+    const version = readUint8();
+    const flag1 = readUint8();
+    const flag2 = readUint8();
+    const flag3 = readUint8();
+    if (version === null || flag1 === null || flag2 === null || flag3 === null) return null;
+    const flags = (flag1 << 16) | (flag2 << 8) | flag3;
+    addDetail('version', version);
+    addDetail('flags', formatHex(flags, 6));
+    markChildOffset();
+    return { version, flags };
+  };
+
+  switch (box.type) {
+    case 'ftyp':
+    case 'styp': {
+      const major = readString(4);
+      if (major) addDetail('major_brand', `'${major}'`);
+      const minor = readUint32();
+      if (minor !== null) addDetail('minor_version', minor);
+      const brands = [];
+      while (remaining >= 4) {
+        const brand = readString(4);
+        if (!brand) break;
+        brands.push(`'${brand}'`);
+      }
+      if (brands.length) addDetail('compatible_brands', brands.join(', '));
+      markChildOffset();
+      break;
+    }
+    case 'mvhd': {
+      const full = readFullBoxHeader();
+      if (!full) break;
+      if (full.version === 1) {
+        const creation = readUint64Val();
+        if (creation !== null) addDetail('creation_time', formatMp4Date(creation));
+        const modification = readUint64Val();
+        if (modification !== null) addDetail('modification_time', formatMp4Date(modification));
+        const timescale = readUint32();
+        if (timescale !== null) addDetail('timescale', timescale);
+        const duration = readUint64Val();
+        if (duration !== null) addDetail('duration', formatBigInt(duration));
+      } else {
+        const creation = readUint32();
+        if (creation !== null) addDetail('creation_time', formatMp4Date(BigInt(creation)));
+        const modification = readUint32();
+        if (modification !== null) addDetail('modification_time', formatMp4Date(BigInt(modification)));
+        const timescale = readUint32();
+        if (timescale !== null) addDetail('timescale', timescale);
+        const duration = readUint32();
+        if (duration !== null) addDetail('duration', formatBigInt(BigInt(duration)));
+      }
+      const rate = readUint32();
+      if (rate !== null) addDetail('rate', formatFixed1616(rate));
+      const volume = readUint16();
+      if (volume !== null) addDetail('volume', formatFixed88(volume));
+      skipBytes(10);
+      skipBytes(36);
+      skipBytes(24);
+      const nextTrackId = readUint32();
+      if (nextTrackId !== null) addDetail('next_track_id', nextTrackId);
+      markChildOffset();
+      break;
+    }
+    case 'tkhd': {
+      const full = readFullBoxHeader();
+      if (!full) break;
+      const creation = full.version === 1 ? readUint64Val() : readUint32();
+      if (creation !== null) addDetail('creation_time', formatMp4Date(typeof creation === 'bigint' ? creation : BigInt(creation)));
+      const modification = full.version === 1 ? readUint64Val() : readUint32();
+      if (modification !== null) addDetail('modification_time', formatMp4Date(typeof modification === 'bigint' ? modification : BigInt(modification)));
+      const trackId = readUint32();
+      if (trackId !== null) addDetail('track_id', trackId);
+      skipBytes(4);
+      const durationRaw = full.version === 1 ? readUint64Val() : readUint32();
+      if (durationRaw !== null) addDetail('duration', formatBigInt(typeof durationRaw === 'bigint' ? durationRaw : BigInt(durationRaw)));
+      skipBytes(8);
+      const layer = readUint16();
+      if (layer !== null) addDetail('layer', layer);
+      const alternate = readUint16();
+      if (alternate !== null) addDetail('alternate_group', alternate);
+      const vol = readUint16();
+      if (vol !== null) addDetail('volume', formatFixed88(vol));
+      skipBytes(2);
+      skipBytes(36);
+      const widthRaw = readUint32();
+      const heightRaw = readUint32();
+      if (widthRaw !== null) addDetail('width', (widthRaw / 65536).toFixed(2));
+      if (heightRaw !== null) addDetail('height', (heightRaw / 65536).toFixed(2));
+      markChildOffset();
+      break;
+    }
+    case 'mdhd': {
+      const full = readFullBoxHeader();
+      if (!full) break;
+      const creation = full.version === 1 ? readUint64Val() : readUint32();
+      if (creation !== null) addDetail('creation_time', formatMp4Date(typeof creation === 'bigint' ? creation : BigInt(creation)));
+      const modification = full.version === 1 ? readUint64Val() : readUint32();
+      if (modification !== null) addDetail('modification_time', formatMp4Date(typeof modification === 'bigint' ? modification : BigInt(modification)));
+      const timescale = readUint32();
+      if (timescale !== null) addDetail('timescale', timescale);
+      const duration = full.version === 1 ? readUint64Val() : readUint32();
+      if (duration !== null) addDetail('duration', formatBigInt(typeof duration === 'bigint' ? duration : BigInt(duration)));
+      const languageBits = readUint16();
+      if (languageBits !== null) addDetail('language', decodeIso639(languageBits));
+      readUint16();
+      markChildOffset();
+      break;
+    }
+    case 'hdlr': {
+      const full = readFullBoxHeader();
+      if (!full) break;
+      skipBytes(4);
+      const handler = readString(4);
+      if (handler) addDetail('handler_type', `'${handler}'`);
+      skipBytes(12);
+      if (remaining > 0) {
+        const name = readString(remaining);
+        if (name) addDetail('name', name);
+      }
+      markChildOffset();
+      break;
+    }
+    case 'mehd': {
+      const full = readFullBoxHeader();
+      if (!full) break;
+      const duration = full.version === 1 ? readUint64Val() : readUint32();
+      if (duration !== null) addDetail('fragment_duration', formatBigInt(typeof duration === 'bigint' ? duration : BigInt(duration)));
+      markChildOffset();
+      break;
+    }
+    case 'trex': {
+      const full = readFullBoxHeader();
+      if (!full) break;
+      const trackId = readUint32();
+      if (trackId !== null) addDetail('track_id', trackId);
+      const descIdx = readUint32();
+      if (descIdx !== null) addDetail('default_sample_description_index', descIdx);
+      const defDuration = readUint32();
+      if (defDuration !== null) addDetail('default_sample_duration', defDuration);
+      const defSize = readUint32();
+      if (defSize !== null) addDetail('default_sample_size', defSize);
+      const defFlags = readUint32();
+      if (defFlags !== null) addDetail('default_sample_flags', formatHex(defFlags));
+      markChildOffset();
+      break;
+    }
+    case 'mfhd': {
+      const full = readFullBoxHeader();
+      if (!full) break;
+      const seq = readUint32();
+      if (seq !== null) addDetail('sequence_number', seq);
+      markChildOffset();
+      break;
+    }
+    case 'tfdt': {
+      const full = readFullBoxHeader();
+      if (!full) break;
+      const value = full.version === 1 ? readUint64Val() : readUint32();
+      if (value !== null) addDetail('base_media_decode_time', formatBigInt(typeof value === 'bigint' ? value : BigInt(value)));
+      markChildOffset();
+      break;
+    }
+    case 'tfhd': {
+      const full = readFullBoxHeader();
+      if (!full) break;
+      const flags = full.flags || 0;
+      const trackId = readUint32();
+      if (trackId !== null) addDetail('track_id', trackId);
+      if (flags & 0x000001) {
+        const baseOffset = readUint64Val();
+        if (baseOffset !== null) addDetail('base_data_offset', formatBigInt(baseOffset));
+      }
+      if (flags & 0x000002) {
+        const sampleDesc = readUint32();
+        if (sampleDesc !== null) addDetail('sample_description_index', sampleDesc);
+      }
+      if (flags & 0x000008) {
+        const sampleDuration = readUint32();
+        if (sampleDuration !== null) addDetail('default_sample_duration', sampleDuration);
+      }
+      if (flags & 0x000010) {
+        const sampleSize = readUint32();
+        if (sampleSize !== null) addDetail('default_sample_size', sampleSize);
+      }
+      if (flags & 0x000020) {
+        const sampleFlags = readUint32();
+        if (sampleFlags !== null) addDetail('default_sample_flags', formatHex(sampleFlags));
+      }
+      markChildOffset();
+      break;
+    }
+    case 'trun': {
+      const full = readFullBoxHeader();
+      if (!full) break;
+      const flags = full.flags || 0;
+      const sampleCount = readUint32();
+      if (sampleCount !== null) addDetail('sample_count', sampleCount);
+      if (flags & 0x000001) {
+        const dataOffset = readInt32();
+        if (dataOffset !== null) addDetail('data_offset', dataOffset);
+      }
+      if (flags & 0x000004) {
+        const firstFlags = readUint32();
+        if (firstFlags !== null) addDetail('first_sample_flags', formatHex(firstFlags));
+      }
+      markChildOffset();
+      break;
+    }
+    case 'sidx': {
+      const full = readFullBoxHeader();
+      if (!full) break;
+      const refId = readUint32();
+      if (refId !== null) addDetail('reference_id', refId);
+      const timescale = readUint32();
+      if (timescale !== null) addDetail('timescale', timescale);
+      if (full.version === 1) {
+        const earliest = readUint64Val();
+        if (earliest !== null) addDetail('earliest_presentation_time', formatBigInt(earliest));
+        const firstOffset = readUint64Val();
+        if (firstOffset !== null) addDetail('first_offset', formatBigInt(firstOffset));
+      } else {
+        const earliest32 = readUint32();
+        if (earliest32 !== null) addDetail('earliest_presentation_time', earliest32);
+        const firstOffset32 = readUint32();
+        if (firstOffset32 !== null) addDetail('first_offset', firstOffset32);
+      }
+      const reserved = readUint16();
+      if (reserved !== null) addDetail('reserved', formatHex(reserved, 4));
+      const refCount = readUint16();
+      if (refCount !== null) addDetail('reference_count', refCount);
+      markChildOffset();
+      break;
+    }
+    case 'pssh': {
+      const full = readFullBoxHeader();
+      if (!full) break;
+      if (ensure(16)) {
+        const systemIdBytes = bytes.subarray(cursor, cursor + 16);
+        cursor += 16;
+        remaining -= 16;
+        addDetail('system_id', formatUuid(systemIdBytes));
+      }
+      if (full.version > 0) {
+        const kidCount = readUint32();
+        if (kidCount !== null) {
+          const kids = [];
+          for (let i = 0; i < kidCount && ensure(16); i++) {
+            const kidBytes = bytes.subarray(cursor, cursor + 16);
+            cursor += 16;
+            remaining -= 16;
+            kids.push(formatUuid(kidBytes));
+          }
+          if (kids.length) addDetail('kids', kids.join(', '));
+        }
+      }
+      const dataSize = readUint32();
+      if (dataSize !== null && ensure(dataSize)) {
+        cursor += dataSize;
+        remaining -= dataSize;
+        addDetail('data_size', `${dataSize.toLocaleString()} bytes`);
+      }
+      markChildOffset();
+      break;
+    }
+    case 'meta': {
+      const full = readFullBoxHeader();
+      if (!full) break;
+      skipBytes(4);
+      markChildOffset();
+      break;
+    }
+    case 'dref': {
+      const full = readFullBoxHeader();
+      if (!full) break;
+      const entryCount = readUint32();
+      if (entryCount !== null) addDetail('entry_count', entryCount);
+      markChildOffset();
+      break;
+    }
+    case 'mdat': {
+      if (payloadSize > 0) addDetail('payload_bytes', `${payloadSize.toLocaleString()} bytes`);
+      break;
+    }
+    default: {
+      if (payloadSize > 0) {
+        addDetail('payload_bytes', `${payloadSize.toLocaleString()} bytes`);
+      }
+      break;
+    }
+  }
+
+  return { details, childOffset };
+}
+
+function readUint64(view, offset) {
+  if (typeof view.getBigUint64 === 'function') {
+    return view.getBigUint64(offset);
+  }
+  const high = BigInt(view.getUint32(offset));
+  const low = BigInt(view.getUint32(offset + 4));
+  return (high << 32n) | low;
+}
+
+function formatMp4Date(value) {
+  if (value === null || value === undefined) return '';
+  const val = typeof value === 'bigint' ? value : BigInt(value);
+  if (val === 0n) return '0';
+  const unixSeconds = val - MP4_EPOCH_OFFSET;
+  try {
+    const ms = unixSeconds * 1000n;
+    if (ms > BigInt(Number.MAX_SAFE_INTEGER) || ms < BigInt(Number.MIN_SAFE_INTEGER)) {
+      return val.toString();
+    }
+    const date = new Date(Number(ms));
+    if (Number.isNaN(date.getTime())) return val.toString();
+    return `${val.toString()} (${date.toISOString()})`;
+  } catch {
+    return val.toString();
+  }
+}
+
+function formatBigInt(value) {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'bigint') return value.toString();
+  if (typeof value === 'number') return Number.isFinite(value) ? value.toLocaleString() : String(value);
+  return String(value);
+}
+
+function formatFixed1616(raw) {
+  if (raw === null || raw === undefined) return '';
+  return (raw / 65536).toFixed(4);
+}
+
+function formatFixed88(raw) {
+  if (raw === null || raw === undefined) return '';
+  return (raw / 256).toFixed(2);
+}
+
+function formatHex(value, digits = 8) {
+  if (value === null || value === undefined) return '';
+  const big = typeof value === 'bigint' ? value : BigInt(value);
+  return `0x${big.toString(16).padStart(digits, '0')}`;
+}
+
+function decodeIso639(bits) {
+  if (bits === null || bits === undefined) return '';
+  const c1 = ((bits >> 10) & 0x1f) + 0x60;
+  const c2 = ((bits >> 5) & 0x1f) + 0x60;
+  const c3 = (bits & 0x1f) + 0x60;
+  return `${String.fromCharCode(c1, c2, c3)}`;
+}
+
+function formatUuid(bytes) {
+  const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+function fourCC(bytes, offset) {
+  if (offset + 4 > bytes.length) return '';
+  return String.fromCharCode(bytes[offset], bytes[offset + 1], bytes[offset + 2], bytes[offset + 3]);
+}
+
+function formatDetailDisplay(value) {
+  if (value === null || value === undefined || value === '') return '—';
+  if (typeof value === 'number') return Number.isFinite(value) ? value.toLocaleString() : String(value);
+  if (typeof value === 'bigint') return value.toString();
+  if (Array.isArray(value)) return value.map(formatDetailDisplay).join(', ');
+  return String(value);
+}
 
 // Auto-load if URL provided
 if (urlInput.value) load();
