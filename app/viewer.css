@@ -35,9 +35,9 @@ body {
 /* --- Top Bar (stable grid, no weird breakpoints) --- */
 .topbar {
   display: grid;
-  grid-template-columns: 1fr auto;   /* left area | right tools */
+  grid-template-columns: 1fr;        /* URL row, controls row */
   grid-auto-rows: min-content;
-  gap: 10px 8px;
+  row-gap: 10px;
   align-items: center;
   padding: 12px;
   border-bottom: 1px solid var(--border);
@@ -47,11 +47,8 @@ body {
   z-index: 10;
 }
 
-/* URL + Mode ALWAYS together on the same row */
 .topbar .left {
-  display: grid;
-  grid-template-columns: 1fr auto;   /* URL grows, Mode hugs right */
-  gap: 8px;
+  display: block;
   min-width: 0;                      /* prevent overflow */
 }
 
@@ -59,10 +56,30 @@ body {
 .topbar .right {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: flex-start;
   gap: 8px;
   flex-wrap: wrap;                   /* can wrap within its own cell */
   min-width: 0;
+  width: 100%;
+}
+
+@media (min-width: 1280px) {
+  .topbar {
+    grid-template-columns: 1fr auto;
+    column-gap: 8px;
+    row-gap: 8px;
+  }
+
+  .topbar .left {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 8px;
+  }
+
+  .topbar .right {
+    justify-content: flex-end;
+    width: auto;
+  }
 }
 
 /* Controls: unify heights and typography */
@@ -100,26 +117,6 @@ body {
 
 /* Hover polish */
 .topbar button:hover { border-color: var(--acc1); }
-
-/* RESPONSIVE: below 780px, push tools to a second line */
-@media (max-width: 780px) {
-  .topbar {
-    grid-template-columns: 1fr;      /* single column header */
-  }
-
-  /* Left (URL + Mode) stays on row 1 together */
-  .topbar .left {
-    grid-column: 1 / -1;
-  }
-
-  /* Right tools move to row 2 */
-  .topbar .right {
-    grid-column: 1 / -1;
-    justify-content: flex-start;     /* align to left under URL/Mode */
-    row-gap: 8px;
-  }
-}
-
 
 /* --- Main Layout --- */
 main {
@@ -226,6 +223,7 @@ footer {
   padding: 10px 12px;
   color: var(--muted);
   background: var(--panel);
+  text-align: center;
 }
 
 /* --- Responsive Stack --- */
@@ -263,24 +261,4 @@ a[data-hls-uri] {
 }
 a[data-hls-uri]:hover {
   color: var(--acc1);
-}
-
-
-/* Since layout is always stacked now, you can remove this responsive rule: */
-@media (max-width: 780px) {
-  .topbar {
-    grid-template-columns: 1fr;      /* single column header */
-  }
-
-  /* Left (URL + Mode) stays on row 1 together */
-  .topbar .left {
-    grid-column: 1 / -1;
-  }
-
-  /* Right tools move to row 2 */
-  .topbar .right {
-    grid-column: 1 / -1;
-    justify-content: flex-start;     /* align to left under URL/Mode */
-    row-gap: 8px;
-  }
 }

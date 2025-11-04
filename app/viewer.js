@@ -3,11 +3,16 @@ const urlInput = $('url');
 const uaInput = $('ua');
 const modeSelect = $('mode');
 const refreshBtn = $('refresh');
-const copyBtn = $('copy');
+const copyManifestBtn = $('copyManifest');
+const downloadManifestBtn = $('downloadManifest');
+const copyManifestUrlBtn = $('copyManifestUrl');
 const codeEl = $('code');
 const metaEl = $('meta');
 const toggleThemeBtn = $('toggleTheme');
 const entityDecoder = document.createElement('textarea');
+let lastLoadedUrl = '';
+let lastLoadedText = '';
+let hasLoadedManifest = false;
 
 // Init from query params
 const params = new URLSearchParams(location.search);
@@ -284,10 +289,17 @@ async function load() {
   const ua = uaInput.value.trim();
   try {
     codeEl.textContent = 'Loading…';
+    hasLoadedManifest = false;
+    lastLoadedUrl = '';
+    lastLoadedText = '';
+    copyManifestBtn.textContent = '⧉ Copy Manifest as text';
+    copyManifestUrlBtn.textContent = '⧉ Copy Manifest URL';
     const { status, contentType, text, durationMs } = await fetchWithOptionalUA(url, ua);
     const mode = detectMode(url, text, contentType);
 
     lastLoadedUrl = url;
+    lastLoadedText = text;
+    hasLoadedManifest = true;
 
     let html;
     if (mode === 'dash') {
@@ -315,18 +327,65 @@ async function load() {
     chrome.storage.sync.set({ customUA: ua });
   } catch (e) {
     codeEl.textContent = 'Error: ' + (e && e.message ? e.message : String(e));
+    hasLoadedManifest = false;
+    lastLoadedUrl = '';
+    lastLoadedText = '';
   }
 }
 
 
 refreshBtn.addEventListener('click', load);
 
-copyBtn.addEventListener('click', async () => {
+copyManifestBtn.addEventListener('click', async () => {
+  if (!hasLoadedManifest) {
+    alert('Load a manifest first.');
+    return;
+  }
   try {
     const plain = codeEl.innerText; // innerText preserves newlines
     await navigator.clipboard.writeText(plain);
-    copyBtn.textContent = '✓ Copied';
-    setTimeout(() => (copyBtn.textContent = '⧉ Copy'), 1200);
+    copyManifestBtn.textContent = '✓ Copied';
+    setTimeout(() => (copyManifestBtn.textContent = '⧉ Copy Manifest as text'), 1200);
+  } catch (e) {
+    alert('Copy failed: ' + e.message);
+  }
+});
+
+downloadManifestBtn.addEventListener('click', () => {
+  if (!hasLoadedManifest) {
+    alert('Load a manifest first.');
+    return;
+  }
+  const blob = new Blob([lastLoadedText], { type: 'text/plain;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  let filename = 'manifest.txt';
+  if (lastLoadedUrl) {
+    try {
+      const parsed = new URL(lastLoadedUrl);
+      const segments = parsed.pathname.split('/').filter(Boolean);
+      if (segments.length) filename = segments[segments.length - 1];
+    } catch {
+      // keep default filename
+    }
+  }
+  link.href = url;
+  link.download = filename || 'manifest.txt';
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+});
+
+copyManifestUrlBtn.addEventListener('click', async () => {
+  if (!lastLoadedUrl) {
+    alert('Load a manifest first.');
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(lastLoadedUrl);
+    copyManifestUrlBtn.textContent = '✓ URL Copied';
+    setTimeout(() => (copyManifestUrlBtn.textContent = '⧉ Copy Manifest URL'), 1200);
   } catch (e) {
     alert('Copy failed: ' + e.message);
   }
