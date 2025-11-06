@@ -359,16 +359,20 @@ function decorateSegmentTemplateSpans() {
   const count = Math.min(templateNodes.length, contexts.length);
   for (let i = 0; i < count; i += 1) {
     const info = templateNodes[i];
-    const mediaSpan = info.attrs.media;
-    if (!mediaSpan) continue;
+    const targetSpans = [];
+    if (info.attrs.media) targetSpans.push(info.attrs.media);
+    if (info.attrs.initialization) targetSpans.push(info.attrs.initialization);
+    if (!targetSpans.length) continue;
     const handler = (event) => {
       event.preventDefault();
       openDashRepresentation(i);
     };
-    mediaSpan.classList.add('dash-template-link');
-    mediaSpan.title = 'Click to view segments';
-    mediaSpan.addEventListener('click', handler);
-    dashState.mediaHandlers.push({ span: mediaSpan, handler });
+    targetSpans.forEach((span) => {
+      span.classList.add('dash-template-link');
+      span.title = 'Click to view segments';
+      span.addEventListener('click', handler);
+      dashState.mediaHandlers.push({ span, handler });
+    });
   }
 }
 
@@ -457,9 +461,9 @@ function buildDashData(xmlText, manifestUrl) {
   });
 
   const contexts = [];
-  const templates = collectElementsByLocalName(mpd, 'SegmentTemplate');
-  templates.forEach((templateEl) => {
-    const ctx = createSegmentTemplateContext(templateEl, manifestBase, mpd);
+  const representations = collectElementsByLocalName(mpd, 'Representation');
+  representations.forEach((repEl) => {
+    const ctx = createSegmentTemplateContext(repEl, manifestBase, mpd);
     if (ctx) contexts.push(ctx);
   });
 
@@ -468,28 +472,29 @@ function buildDashData(xmlText, manifestUrl) {
   return { manifestBase, baseOptions, contexts };
 }
 
-function createSegmentTemplateContext(templateEl, manifestBase, mpdEl) {
-  const representation = findAncestorByLocalName(templateEl, 'Representation');
+function createSegmentTemplateContext(representation, manifestBase, mpdEl) {
   if (!representation) return null;
+  const templateInfo = resolveSegmentTemplateForRepresentation(representation);
+  if (!templateInfo || !templateInfo.mediaTemplate) return null;
 
-  const mediaTemplate = getTemplateAttribute(templateEl, 'media');
-  if (!mediaTemplate) return null;
-
-  const initTemplate = getTemplateAttribute(templateEl, 'initialization');
-  const startNumber = parsePositiveInt(getTemplateAttribute(templateEl, 'startNumber')) || 1;
-  const timescale = parsePositiveInt(getTemplateAttribute(templateEl, 'timescale'));
-  const ptoRaw = getTemplateAttribute(templateEl, 'presentationTimeOffset');
-  const pto = Number.parseInt(ptoRaw || '0', 10);
+  const {
+    mediaTemplate,
+    initTemplate,
+    startNumber,
+    timescale,
+    presentationTimeOffset,
+    timelineEl,
+    templateBase,
+  } = templateInfo;
 
   const baseParts = [];
-  const period = findAncestorByLocalName(templateEl, 'Period');
-  const adaptation = findAncestorByLocalName(templateEl, 'AdaptationSet');
+  const period = findAncestorByLocalName(representation, 'Period');
+  const adaptation = findAncestorByLocalName(representation, 'AdaptationSet');
 
   const mpdBase = getPrimaryBaseUrl(mpdEl);
   const periodBase = getPrimaryBaseUrl(period);
   const adaptationBase = getPrimaryBaseUrl(adaptation);
   const representationBase = getPrimaryBaseUrl(representation);
-  const templateBase = getPrimaryBaseUrl(templateEl);
 
   if (periodBase) baseParts.push(periodBase);
   if (adaptationBase) baseParts.push(adaptationBase);
@@ -506,10 +511,17 @@ function createSegmentTemplateContext(templateEl, manifestBase, mpdEl) {
   const codec = (representation.getAttribute('codecs') || '').trim();
   const langAttr = (adaptation && adaptation.getAttribute('lang')) || representation.getAttribute('lang') || '';
   const adaptationLabel = getChildText(adaptation, 'Label');
+  const representationLabel = getChildText(representation, 'Label');
+
+  const labelTokens = [];
+  if (adaptationLabel) labelTokens.push(adaptationLabel);
+  if (representationLabel && representationLabel !== adaptationLabel) labelTokens.push(representationLabel);
+
+  const trimmedLang = langAttr ? langAttr.trim() : '';
   let languageLabel = '';
-  if (adaptationLabel && langAttr) languageLabel = `${adaptationLabel} (${langAttr})`;
-  else if (adaptationLabel) languageLabel = adaptationLabel;
-  else if (langAttr) languageLabel = langAttr;
+  if (labelTokens.length && trimmedLang) languageLabel = `${labelTokens.join(' · ')} · ${trimmedLang}`;
+  else if (labelTokens.length) languageLabel = labelTokens.join(' · ');
+  else if (trimmedLang) languageLabel = trimmedLang;
 
   const labelParts = [];
   if (contentType) labelParts.push(contentType);
@@ -523,8 +535,8 @@ function createSegmentTemplateContext(templateEl, manifestBase, mpdEl) {
   if (repId) labelParts.push(`id=${repId}`);
   const label = labelParts.length ? labelParts.join(' · ') : 'Representation';
 
-  const timelineEl = findFirstChildByLocalName(templateEl, 'SegmentTimeline');
-  const groups = expandSegmentGroups(timelineEl, startNumber, Number.isFinite(pto) ? pto : 0);
+  const pto = Number.isFinite(presentationTimeOffset) ? presentationTimeOffset : 0;
+  const groups = expandSegmentGroups(timelineEl, startNumber, pto);
 
   return {
     label,
@@ -540,6 +552,48 @@ function createSegmentTemplateContext(templateEl, manifestBase, mpdEl) {
     codec,
     languageLabel,
     contentType
+  };
+}
+
+function resolveSegmentTemplateForRepresentation(representation) {
+  const templates = [];
+  let current = representation;
+  while (current) {
+    const templateEl = findFirstChildByLocalName(current, 'SegmentTemplate');
+    if (templateEl) templates.push(templateEl);
+    current = current.parentElement;
+  }
+
+  if (!templates.length) return null;
+
+  const getAttr = (name) => {
+    for (let i = 0; i < templates.length; i += 1) {
+      const tmpl = templates[i];
+      if (tmpl.hasAttribute(name)) return tmpl.getAttribute(name);
+    }
+    return '';
+  };
+
+  const mediaTemplate = getAttr('media');
+  if (!mediaTemplate) return null;
+
+  const templateEl = templates[0];
+  const initTemplate = getAttr('initialization');
+  const startNumber = parsePositiveInt(getAttr('startNumber')) || 1;
+  const timescale = parsePositiveInt(getAttr('timescale'));
+  const ptoRaw = getAttr('presentationTimeOffset');
+  const presentationTimeOffset = Number.parseInt(ptoRaw || '0', 10);
+  const timelineEl = templates.map((tmpl) => findFirstChildByLocalName(tmpl, 'SegmentTimeline')).find(Boolean) || null;
+  const templateBase = getPrimaryBaseUrl(templateEl);
+
+  return {
+    mediaTemplate,
+    initTemplate,
+    startNumber,
+    timescale,
+    presentationTimeOffset,
+    timelineEl,
+    templateBase
   };
 }
 
@@ -664,16 +718,6 @@ function resolveAgainstBase(base, relative) {
   } catch {
     return relative;
   }
-}
-
-function getTemplateAttribute(templateEl, attr) {
-  if (templateEl.hasAttribute(attr)) return templateEl.getAttribute(attr);
-  let ancestor = findAncestorByLocalName(templateEl, 'SegmentTemplate');
-  while (ancestor) {
-    if (ancestor.hasAttribute(attr)) return ancestor.getAttribute(attr);
-    ancestor = findAncestorByLocalName(ancestor, 'SegmentTemplate');
-  }
-  return '';
 }
 
 function parsePositiveInt(value) {
@@ -882,15 +926,92 @@ async function fetchWithOptionalUA(url, ua) {
       console.warn('UA rule not applied:', res && res.error);
     }
   }
+  try {
+    performance.clearResourceTimings();
+  } catch (err) {
+    console.warn('Failed to clear resource timings', err);
+  }
   const t0 = performance.now();
   const r = await fetch(url, { credentials: 'omit', cache: 'no-store' });
-  const ct = r.headers.get('content-type') || '';
-  const buffer = await r.arrayBuffer();
   const t1 = performance.now();
-  return { status: r.status, contentType: ct, buffer, durationMs: t1 - t0 };
+  const ct = r.headers.get('content-type') || '';
+  const bufferPromise = r.arrayBuffer();
+  const buffer = await bufferPromise;
+  const t2 = performance.now();
+
+  let timingEntry = null;
+  let fetchEntries = [];
+  try {
+    const entries = performance.getEntriesByType('resource');
+    if (entries && entries.length) {
+      const resolvedUrl = r.url || url;
+      const exactMatches = entries.filter((entry) => entry.name === resolvedUrl || entry.name === url);
+      fetchEntries = exactMatches.length ? exactMatches : entries.filter((entry) => entry.initiatorType === 'fetch');
+      if (fetchEntries.length) timingEntry = fetchEntries[fetchEntries.length - 1];
+    }
+  } catch (err) {
+    console.warn('Failed to read resource timings', err);
+  }
+  try {
+    performance.clearResourceTimings();
+  } catch {
+    // ignore
+  }
+
+  const fallbackResponse = t1 - t0;
+  const fallbackTotal = t2 - t0;
+  let responseMs = Number.isFinite(fallbackResponse) ? fallbackResponse : null;
+  let totalNetworkMs = Number.isFinite(fallbackTotal) ? fallbackTotal : null;
+  let redirectMs = null;
+  let downloadMs = null;
+  if (timingEntry) {
+    const { startTime, requestStart, responseStart, responseEnd, duration, redirectStart, redirectEnd } = timingEntry;
+    const timingResponse =
+      Number.isFinite(responseStart) && Number.isFinite(requestStart) && responseStart > 0 && requestStart > 0 && responseStart >= requestStart
+        ? responseStart - requestStart
+        : null;
+    const timingTotal =
+      Number.isFinite(responseEnd) && Number.isFinite(startTime) && responseEnd > 0 && startTime > 0 && responseEnd >= startTime
+        ? responseEnd - startTime
+        : Number.isFinite(duration) && duration > 0
+        ? duration
+        : null;
+    const hasTimingResponse = Number.isFinite(timingResponse) && timingResponse >= 0;
+    const hasTimingTotal = Number.isFinite(timingTotal) && timingTotal >= 0;
+    if (hasTimingResponse) responseMs = timingResponse;
+    if (hasTimingTotal) totalNetworkMs = timingTotal;
+    if (!hasTimingResponse && hasTimingTotal) responseMs = timingTotal;
+    if (hasTimingTotal && hasTimingResponse) downloadMs = Math.max(timingTotal - timingResponse, 0);
+    const timingRedirect =
+      Number.isFinite(redirectEnd) && Number.isFinite(redirectStart) && redirectEnd > redirectStart && redirectStart > 0
+        ? redirectEnd - redirectStart
+        : null;
+    if (Number.isFinite(timingRedirect) && timingRedirect > 0) redirectMs = timingRedirect;
+  }
+  if (fetchEntries.length > 1) {
+    const redirectDur = fetchEntries
+      .slice(0, -1)
+      .reduce((sum, entry) => (Number.isFinite(entry.duration) && entry.duration > 0 ? sum + entry.duration : sum), 0);
+    if (redirectDur > 0 && !Number.isFinite(redirectMs)) redirectMs = redirectDur;
+  }
+
+  if (!Number.isFinite(responseMs) || responseMs < 0) responseMs = Number.isFinite(totalNetworkMs) ? totalNetworkMs : fallbackResponse;
+  if (!Number.isFinite(totalNetworkMs) || totalNetworkMs < 0) totalNetworkMs = fallbackTotal;
+  if (!Number.isFinite(downloadMs) || downloadMs < 0) downloadMs = null;
+  if (!Number.isFinite(redirectMs) || redirectMs <= 0) redirectMs = null;
+
+  const processingMs = t2 - t1;
+  return {
+    status: r.status,
+    contentType: ct,
+    buffer,
+    durationMs: responseMs,
+    totalDurationMs: totalNetworkMs,
+    processingMs,
+  };
 }
 
-function renderMeta({ status, contentType, bytes, mode, durationMs }) {
+function renderMeta({ status, contentType, bytes, mode, durationMs, totalDurationMs, processingMs }) {
   metaEl.innerHTML = '';
   const add = (label, value) => {
     const div = document.createElement('div');
@@ -902,7 +1023,11 @@ function renderMeta({ status, contentType, bytes, mode, durationMs }) {
   add('Content-Type', `<code>${escapeHTML(contentType || 'n/a')}</code>`);
   add('Mode', mode.toUpperCase());
   add('Size', `${bytes.toLocaleString()} bytes`);
-  add('Response time', `${formatDuration(durationMs)}`);
+  const finiteResponse = Number.isFinite(durationMs) ? durationMs : null;
+  const finiteTotal = Number.isFinite(totalDurationMs) ? totalDurationMs : null;
+  const derivedProcessing = Number.isFinite(processingMs) ? processingMs : null;
+  if (finiteResponse !== null) add('Response time', `${formatDuration(finiteResponse)}`);
+  if (derivedProcessing !== null && derivedProcessing > 1) add('Processing time', `${formatDuration(derivedProcessing)}`);
 }
 
 function updateBackButton() {
@@ -1023,7 +1148,7 @@ async function load(options = {}) {
     copyManifestUrlBtn.textContent = '⧉ Copy Manifest URL';
     downloadManifestBtn.textContent = '⇣ Download Manifest';
     updateActionButtons(null);
-    const { status, contentType, buffer, durationMs } = await fetchWithOptionalUA(url, ua);
+    const { status, contentType, buffer, durationMs, totalDurationMs, processingMs } = await fetchWithOptionalUA(url, ua);
     lastLoadedContentType = contentType;
     const byteArray = new Uint8Array(buffer);
     const selectedMode = modeSelect.value;
@@ -1066,6 +1191,8 @@ async function load(options = {}) {
       bytes: byteArray.length,
       mode,
       durationMs,
+      totalDurationMs,
+      processingMs,
     };
     renderLoadedView({
       mode,
@@ -1977,3 +2104,18 @@ function formatDetailDisplay(value) {
 
 // Auto-load if URL provided
 if (urlInput.value) load();
+
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = {
+    formatDuration,
+    isLikelyMp4,
+    deriveManifestBase,
+    resolveAgainstBase,
+    parseRepeatCount,
+    formatMp4Date,
+    formatBigInt,
+    formatHex,
+    decodeIso639,
+    formatUuid,
+  };
+}

@@ -164,3 +164,10 @@ chrome.downloads.onCreated.addListener(async (item) => {
     // ignore
   }
 });
+
+if (typeof module !== "undefined" && module.exports) {
+  module.exports = {
+    buildExactUrlRule,
+    looksLikeManifestUrl,
+  };
+}
