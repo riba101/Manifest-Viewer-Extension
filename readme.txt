@@ -44,6 +44,12 @@ Linting & Formatting
   npx prettier --write <files>
   ```
 
+Validation
+----------
+- Load a manifest in the viewer and use the contextual `Validate HLS` / `Validate DASH` button to replace the manifest panel with validation results.
+- The validator performs lightweight structural checks (required tags, segment addressing, timeline integrity) and reports errors, warnings, and info entries directly in the viewer.
+- Use the validation button (or the back control) again to return to the original manifest view; history entries are preserved so you can move between views.
+
 Development Notes
 -----------------
 - Unit tests live under `__tests__/` and leverage Jest + JSDOM. They cover the pure utility functions in `app/viewer.js` and helper logic in `app/background.js`.

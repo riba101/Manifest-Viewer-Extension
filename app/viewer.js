@@ -7,6 +7,7 @@ const copyManifestBtn = $('copyManifest');
 const downloadManifestBtn = $('downloadManifest');
 const copyManifestUrlBtn = $('copyManifestUrl');
 const backBtn = $('back');
+const validateBtn = $('validateManifest');
 const codeEl = $('code');
 const metaEl = $('meta');
 const toggleThemeBtn = $('toggleTheme');
@@ -19,6 +20,7 @@ let lastLoadedMode = 'auto';
 let lastLoadedContentType = '';
 let lastResponseMeta = null;
 const navigationStack = [];
+let currentValidationView = null;
 
 // Init from query params
 const params = new URLSearchParams(location.search);
@@ -50,6 +52,91 @@ toggleThemeBtn.addEventListener('click', () => {
   setTheme(next);
   localStorage.setItem('mv_theme', next);
 });
+
+async function fetchTextWithOptionalUA(url) {
+  const ua = uaInput ? uaInput.value.trim() : '';
+  const { status, buffer } = await fetchWithOptionalUA(url, ua);
+  if (status && Number.isFinite(status) && status >= 400) {
+    throw new Error(`HTTP ${status}`);
+  }
+  const byteArray = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+  const decoder = new TextDecoder('utf-8', { fatal: false });
+  return decoder.decode(byteArray);
+}
+
+if (validateBtn) {
+  validateBtn.addEventListener('click', async () => {
+    if (validateBtn.disabled) return;
+    if (lastLoadedMode === 'validation') {
+      if (!navigationStack.length) return;
+      const snapshot = navigationStack.pop();
+      restoreSnapshot(snapshot);
+      updateBackButton();
+      return;
+    }
+    if (lastLoadedMode !== 'dash' && lastLoadedMode !== 'hls') return;
+    if (typeof lastLoadedText !== 'string' || !lastLoadedText.trim()) {
+      console.warn('Manifest text unavailable for validation.');
+      return;
+    }
+    const validator =
+      (typeof window !== 'undefined' && window.ManifestValidation) || null;
+    if (!validator) {
+      console.error('Manifest validation library unavailable.');
+      return;
+    }
+    const validateFn =
+      lastLoadedMode === 'dash'
+        ? validator.validateDashManifest
+        : validator.validateHlsManifest;
+    if (typeof validateFn !== 'function') {
+      console.error('Manifest validation function unavailable.');
+      return;
+    }
+    if (lastLoadedMode === 'hls') {
+      validateBtn.disabled = true;
+      validateBtn.textContent = 'Validating…';
+    }
+    try {
+      const validationOptions =
+        lastLoadedMode === 'hls'
+          ? {
+              baseUrl: lastLoadedUrl || '',
+              fetchPlaylist: async (uri) => fetchTextWithOptionalUA(uri),
+            }
+          : undefined;
+      const result =
+        lastLoadedMode === 'hls'
+          ? await validateFn(lastLoadedText, validationOptions)
+          : validateFn(lastLoadedText);
+      pushCurrentState();
+      currentValidationView = {
+        sourceMode: lastLoadedMode,
+        url: lastLoadedUrl,
+        result,
+      };
+      lastLoadedMode = 'validation';
+      hasLoadedManifest = true;
+      lastLoadedText = '';
+      lastLoadedBuffer = null;
+      lastLoadedContentType = '';
+      lastResponseMeta = null;
+      renderLoadedView({
+        mode: 'validation',
+        text: '',
+        buffer: null,
+        url: lastLoadedUrl,
+        meta: null,
+        validation: currentValidationView,
+      });
+      updateBackButton();
+    } catch (err) {
+      console.error('Failed to validate manifest', err);
+      validateBtn.disabled = false;
+      validateBtn.textContent = lastLoadedMode === 'dash' ? 'Validate DASH' : 'Validate HLS';
+    }
+  });
+}
 
 function escapeHTML(s) {
   return s.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
@@ -133,6 +220,7 @@ const dashState = {
   data: null,
   selectedBase: 'auto',
   mediaHandlers: [],
+  unsupported: [],
 };
 
 function cleanupDashDecorations() {
@@ -144,6 +232,7 @@ function cleanupDashDecorations() {
   if (dashState.summary) dashState.summary.textContent = 'Segments';
   if (dashState.panel) dashState.panel.open = false;
   if (dashState.panel) dashState.panel.style.display = 'none';
+  dashState.unsupported = [];
 }
 
 function removeMediaTemplateHandlers() {
@@ -158,19 +247,24 @@ function decorateDashManifest(xmlText, manifestUrl) {
   removeMediaTemplateHandlers();
 
   const data = buildDashData(xmlText, manifestUrl);
-  if (!data || !data.contexts.length) {
+  if (!data) {
     cleanupDashDecorations();
     return;
   }
 
   dashState.data = data;
+  dashState.unsupported = data.unsupportedSegments || [];
 
   ensureDashInspector();
   if (dashState.panel) dashState.panel.style.display = 'block';
   populateDashBaseOptions(data.baseOptions);
   renderDashInspector();
-  if (dashState.panel) dashState.panel.open = false;
-  decorateSegmentTemplateSpans();
+  if (data.contexts && data.contexts.length) {
+    if (dashState.panel) dashState.panel.open = false;
+    decorateSegmentTemplateSpans();
+  } else if (dashState.panel) {
+    dashState.panel.open = dashState.unsupported.length > 0;
+  }
 }
 
 function ensureDashInspector() {
@@ -263,10 +357,77 @@ function populateDashBaseOptions(baseOptions) {
 function renderDashInspector() {
   if (!dashState.panel || !dashState.list) return;
   const data = dashState.data;
-  if (!data || !data.contexts.length) {
+  const unsupported = dashState.unsupported || [];
+  const totalReps =
+    (data && Number.isFinite(data.totalRepresentations) ? data.totalRepresentations : 0) ||
+    contexts.length + unsupported.length;
+  const hasSegments = data && data.contexts && data.contexts.length;
+  if (!data || !hasSegments) {
     dashState.list.innerHTML = '';
-    if (dashState.summary) dashState.summary.textContent = 'Segments (0)';
-    dashState.panel.open = false;
+    if (dashState.summary) {
+      dashState.summary.textContent =
+        totalReps > 0 ? `Representations (${totalReps})` : 'Representations (0)';
+    }
+    if (dashState.toolbar) dashState.toolbar.style.display = 'none';
+    if (unsupported.length) {
+      const info = document.createElement('div');
+      info.className = 'dash-empty';
+      info.textContent =
+        'Segment inspector currently supports SegmentTemplate with a media attribute. Some representations could not be expanded:';
+      dashState.list.appendChild(info);
+
+      const list = document.createElement('ul');
+      list.className = 'dash-empty-list';
+      unsupported.forEach((entry) => {
+        const li = document.createElement('li');
+        li.className = 'dash-empty-item';
+
+        const labelText =
+          entry.label || (entry.representationId ? `id=${entry.representationId}` : 'Representation');
+        let reason =
+          entry.reason ||
+          (entry.type === 'SegmentBase'
+            ? 'Uses SegmentBase (single-file) structure.'
+            : entry.type === 'SegmentList'
+            ? 'Uses SegmentList structure.'
+            : 'Segment addressing not detected.');
+
+        const finalLabel = entry.type === 'SegmentBase' ? `${labelText} (single-file)` : labelText;
+
+        if (entry.url) {
+          const link = document.createElement('a');
+          link.className = 'dash-empty-link';
+          link.href = entry.url;
+          link.dataset.manifestLink = '1';
+          link.dataset.manifestTarget = entry.url;
+          link.textContent = finalLabel;
+          li.appendChild(link);
+        } else {
+          const labelSpan = document.createElement('span');
+          labelSpan.className = 'dash-empty-title';
+          labelSpan.textContent = finalLabel;
+          li.appendChild(labelSpan);
+        }
+
+        if (entry.type === 'SegmentBase') {
+          reason = '';
+        }
+
+        if (reason) {
+          const reasonSpan = document.createElement('span');
+          reasonSpan.className = 'dash-empty-reason';
+          reasonSpan.textContent = ` — ${reason}`;
+          li.appendChild(reasonSpan);
+        }
+
+        list.appendChild(li);
+      });
+      dashState.list.appendChild(list);
+    }
+    if (dashState.panel) {
+      dashState.panel.style.display = unsupported.length ? 'block' : 'none';
+      dashState.panel.open = unsupported.length > 0;
+    }
     return;
   }
 
@@ -348,7 +509,12 @@ function renderDashInspector() {
       (sum, ctx) => sum + ctx.groups.reduce((inner, group) => inner + group.segments.length, 0),
       0
     );
-    dashState.summary.textContent = `Segments (${contexts.length} rep, ${totalSegments} segment${totalSegments === 1 ? '' : 's'})`;
+    if (totalReps > 0 && totalSegments > 0) {
+      dashState.summary.textContent = `Representations (${totalReps}), Segments (${totalSegments})`;
+    } else {
+      dashState.summary.textContent =
+        totalReps > 0 ? `Representations (${totalReps})` : 'Representations (0)';
+    }
   }
 }
 
@@ -447,6 +613,7 @@ function buildDashData(xmlText, manifestUrl) {
 
   const baseOptions = [];
   const seenBase = new Set();
+  const unsupportedSegments = [];
   Array.from(mpd.children || []).forEach((child) => {
     if (child.localName === 'BaseURL') {
       const text = (child.textContent || '').trim();
@@ -461,33 +628,23 @@ function buildDashData(xmlText, manifestUrl) {
   });
 
   const contexts = [];
+  let totalRepresentations = 0;
   const representations = collectElementsByLocalName(mpd, 'Representation');
   representations.forEach((repEl) => {
-    const ctx = createSegmentTemplateContext(repEl, manifestBase, mpd);
+    totalRepresentations += 1;
+    const ctx = createSegmentTemplateContext(repEl, manifestBase, mpd, unsupportedSegments);
     if (ctx) contexts.push(ctx);
   });
 
-  if (!contexts.length) return { manifestBase, baseOptions: [], contexts: [] };
+  if (!contexts.length && !unsupportedSegments.length) return { manifestBase, baseOptions: [], contexts: [], totalRepresentations };
 
-  return { manifestBase, baseOptions, contexts };
+  return { manifestBase, baseOptions, contexts, unsupportedSegments, totalRepresentations };
 }
 
-function createSegmentTemplateContext(representation, manifestBase, mpdEl) {
+function createSegmentTemplateContext(representation, manifestBase, mpdEl, unsupportedSegments = null) {
   if (!representation) return null;
-  const templateInfo = resolveSegmentTemplateForRepresentation(representation);
-  if (!templateInfo || !templateInfo.mediaTemplate) return null;
+  const segmentInfo = identifySegmentInfoForRepresentation(representation);
 
-  const {
-    mediaTemplate,
-    initTemplate,
-    startNumber,
-    timescale,
-    presentationTimeOffset,
-    timelineEl,
-    templateBase,
-  } = templateInfo;
-
-  const baseParts = [];
   const period = findAncestorByLocalName(representation, 'Period');
   const adaptation = findAncestorByLocalName(representation, 'AdaptationSet');
 
@@ -496,12 +653,19 @@ function createSegmentTemplateContext(representation, manifestBase, mpdEl) {
   const adaptationBase = getPrimaryBaseUrl(adaptation);
   const representationBase = getPrimaryBaseUrl(representation);
 
+  const baseParts = [];
   if (periodBase) baseParts.push(periodBase);
   if (adaptationBase) baseParts.push(adaptationBase);
   if (representationBase) baseParts.push(representationBase);
-  if (templateBase) baseParts.push(templateBase);
 
   const autoBase = mpdBase ? resolveAgainstBase(manifestBase, mpdBase) : manifestBase;
+  const resolveBaseUrl = () => {
+    try {
+      return baseParts.reduce((acc, part) => resolveAgainstBase(acc, part), autoBase);
+    } catch {
+      return autoBase;
+    }
+  };
 
   const contentType = (adaptation && adaptation.getAttribute('contentType')) || '';
   const width = representation.getAttribute('width');
@@ -535,6 +699,52 @@ function createSegmentTemplateContext(representation, manifestBase, mpdEl) {
   if (repId) labelParts.push(`id=${repId}`);
   const label = labelParts.length ? labelParts.join(' · ') : 'Representation';
 
+  if (!segmentInfo || segmentInfo.type !== 'SegmentTemplate') {
+    if (unsupportedSegments) {
+      unsupportedSegments.push({
+        representationId: repId || '',
+        label,
+        type: segmentInfo ? segmentInfo.type : 'none',
+        reason:
+          !segmentInfo
+            ? 'No SegmentTemplate/SegmentList/SegmentBase found.'
+            : segmentInfo.type === 'SegmentBase'
+            ? 'Uses SegmentBase (single-file) addressing.'
+            : segmentInfo.type === 'SegmentList'
+            ? 'Uses SegmentList addressing.'
+            : 'SegmentTemplate is unavailable.',
+        url: resolveBaseUrl(),
+      });
+    }
+    return null;
+  }
+
+  const templateInfo = resolveSegmentTemplateForRepresentation(representation);
+  if (!templateInfo || !templateInfo.mediaTemplate) {
+    if (unsupportedSegments) {
+      unsupportedSegments.push({
+        representationId: repId || '',
+        label,
+        type: 'SegmentTemplate',
+        reason: 'SegmentTemplate is missing a @media attribute.',
+        url: resolveBaseUrl(),
+      });
+    }
+    return null;
+  }
+
+  const {
+    mediaTemplate,
+    initTemplate,
+    startNumber,
+    timescale,
+    presentationTimeOffset,
+    timelineEl,
+    templateBase,
+  } = templateInfo;
+
+  if (templateBase) baseParts.push(templateBase);
+
   const pto = Number.isFinite(presentationTimeOffset) ? presentationTimeOffset : 0;
   const groups = expandSegmentGroups(timelineEl, startNumber, pto);
 
@@ -553,6 +763,20 @@ function createSegmentTemplateContext(representation, manifestBase, mpdEl) {
     languageLabel,
     contentType
   };
+}
+
+function identifySegmentInfoForRepresentation(representation) {
+  let current = representation;
+  while (current) {
+    const templateEl = findFirstChildByLocalName(current, 'SegmentTemplate');
+    if (templateEl) return { type: 'SegmentTemplate', element: templateEl };
+    const listEl = findFirstChildByLocalName(current, 'SegmentList');
+    if (listEl) return { type: 'SegmentList', element: listEl };
+    const baseEl = findFirstChildByLocalName(current, 'SegmentBase');
+    if (baseEl) return { type: 'SegmentBase', element: baseEl };
+    current = current.parentElement;
+  }
+  return null;
 }
 
 function resolveSegmentTemplateForRepresentation(representation) {
@@ -1011,7 +1235,7 @@ async function fetchWithOptionalUA(url, ua) {
   };
 }
 
-function renderMeta({ status, contentType, bytes, mode, durationMs, totalDurationMs, processingMs }) {
+function renderMeta({ status, contentType, bytes, mode, durationMs }) {
   metaEl.innerHTML = '';
   const add = (label, value) => {
     const div = document.createElement('div');
@@ -1024,11 +1248,8 @@ function renderMeta({ status, contentType, bytes, mode, durationMs, totalDuratio
   add('Mode', mode.toUpperCase());
   add('Size', `${bytes.toLocaleString()} bytes`);
   const finiteResponse = Number.isFinite(durationMs) ? durationMs : null;
-  const finiteTotal = Number.isFinite(totalDurationMs) ? totalDurationMs : null;
-  const derivedProcessing = Number.isFinite(processingMs) ? processingMs : null;
   if (finiteResponse !== null) add('Response time', `${formatDuration(finiteResponse)}`);
-  if (finiteTotal !== null && finiteTotal > 0) add('Total time', `${formatDuration(finiteTotal)}`);
-  if (derivedProcessing !== null && derivedProcessing > 1) add('Processing time', `${formatDuration(derivedProcessing)}`);
+  // Total time and Processing time intentionally omitted to declutter meta panel
 }
 
 function updateBackButton() {
@@ -1050,13 +1271,29 @@ function pushCurrentState() {
     contentType: lastLoadedContentType,
     meta: lastResponseMeta ? { ...lastResponseMeta } : null,
     selectedMode: modeSelect.value,
+    validation: currentValidationView
+      ? {
+          sourceMode: currentValidationView.sourceMode,
+          url: currentValidationView.url,
+          result: {
+            errors: currentValidationView.result.errors.map((entry) => ({ ...entry })),
+            warnings: currentValidationView.result.warnings.map((entry) => ({ ...entry })),
+            info: currentValidationView.result.info.map((entry) => ({ ...entry })),
+          },
+        }
+      : null,
   };
   navigationStack.push(snapshot);
   updateBackButton();
 }
 
-function renderLoadedView({ mode, text, buffer, url, meta }) {
+function renderLoadedView({ mode, text, buffer, url, meta, validation }) {
   cleanupDashDecorations();
+  if (mode === 'validation') {
+    renderValidationView(validation);
+    updateActionButtons(mode);
+    return;
+  }
   if (mode === 'dash') {
     codeEl.className = 'language-plain';
     codeEl.innerHTML = highlightDASH(text, url);
@@ -1096,6 +1333,182 @@ function renderLoadedView({ mode, text, buffer, url, meta }) {
   updateActionButtons(mode);
 }
 
+function renderValidationView(view) {
+  const validation = view || null;
+  currentValidationView = validation;
+
+  metaEl.innerHTML = '';
+  const addMeta = (label, value) => {
+    const div = document.createElement('div');
+    div.className = 'item';
+    div.innerHTML = `<strong>${label}:</strong><span>${value}</span>`;
+    metaEl.appendChild(div);
+  };
+
+  if (!validation || !validation.result) {
+    addMeta('Validation', 'No data');
+    codeEl.className = 'validation-results';
+    codeEl.textContent = 'Validation data unavailable.';
+    return;
+  }
+
+  const { sourceMode, result } = validation;
+  const errorCount = result.errors.length;
+  const warningCount = result.warnings.length;
+  const infoCount = result.info.length;
+
+  addMeta('Mode', sourceMode ? sourceMode.toUpperCase() : '—');
+  const statusLabel = errorCount
+    ? 'Failed'
+    : warningCount
+    ? 'Warnings'
+    : 'Passed';
+  addMeta('Status', statusLabel);
+  addMeta('Errors', errorCount);
+  addMeta('Warnings', warningCount);
+  addMeta('Info', infoCount);
+  if (validation.mediaPlaylists && validation.mediaPlaylists.length) {
+    addMeta('Child playlists', validation.mediaPlaylists.length);
+  }
+
+  const container = document.createElement('div');
+  container.className = 'validation-container';
+
+  const summary = document.createElement('div');
+  summary.className = 'validation-summary';
+  summary.textContent = `Errors: ${errorCount} · Warnings: ${warningCount} · Info: ${infoCount}`;
+  const banner = document.createElement('div');
+  banner.className = 'validation-banner';
+  banner.innerHTML =
+    '<strong>Experimental:</strong> HLS/DASH validation is experimental and may produce incomplete results.';
+  container.appendChild(banner);
+  container.appendChild(summary);
+
+  const sectionsWrapper = document.createElement('div');
+  sectionsWrapper.className = 'validation-sections';
+
+  const sections = [
+    { label: 'Errors', items: result.errors, kind: 'error' },
+    { label: 'Warnings', items: result.warnings, kind: 'warning' },
+    { label: 'Info', items: result.info, kind: 'info' },
+  ];
+
+  sections.forEach(({ label, items, kind }) => {
+    const section = document.createElement('section');
+    section.className = `validation-section kind-${kind}`;
+
+    const heading = document.createElement('h3');
+    heading.textContent = `${label} (${items.length})`;
+    section.appendChild(heading);
+
+    if (!items.length) {
+      const empty = document.createElement('p');
+      empty.className = 'validation-empty';
+      empty.textContent = `No ${label.toLowerCase()} detected.`;
+      section.appendChild(empty);
+    } else {
+      const list = document.createElement('ul');
+      list.className = 'validation-list';
+      items.forEach((entry) => {
+        const li = document.createElement('li');
+        li.className = 'validation-item';
+        const msg = document.createElement('span');
+        msg.className = 'message';
+        msg.textContent = entry.message || '';
+        li.appendChild(msg);
+        if (Number.isFinite(entry.line)) {
+          const meta = document.createElement('span');
+          meta.className = 'meta';
+          meta.textContent = `Line ${entry.line}`;
+          li.appendChild(meta);
+        }
+        list.appendChild(li);
+      });
+      section.appendChild(list);
+    }
+
+    sectionsWrapper.appendChild(section);
+  });
+
+  if (!errorCount && !warningCount && !infoCount) {
+    const successSection = document.createElement('section');
+    successSection.className = 'validation-section kind-success';
+    const successHeading = document.createElement('h3');
+    successHeading.textContent = 'Summary';
+    const successMessage = document.createElement('p');
+    successMessage.className = 'validation-empty';
+    successMessage.textContent = 'No issues detected.';
+    successSection.appendChild(successHeading);
+    successSection.appendChild(successMessage);
+    sectionsWrapper.appendChild(successSection);
+  }
+
+  container.appendChild(sectionsWrapper);
+
+  if (validation.mediaPlaylists && validation.mediaPlaylists.length) {
+    const childrenSection = document.createElement('section');
+    childrenSection.className = 'validation-section kind-info';
+    const heading = document.createElement('h3');
+    heading.textContent = `Child Playlists (${validation.mediaPlaylists.length})`;
+    childrenSection.appendChild(heading);
+
+    const childList = document.createElement('div');
+    childList.className = 'validation-children';
+    validation.mediaPlaylists.forEach((entry) => {
+      const child = document.createElement('details');
+      child.className = 'validation-child';
+      const summary = document.createElement('summary');
+      summary.textContent = entry.uri || 'Playlist';
+      child.appendChild(summary);
+
+      const body = document.createElement('div');
+      body.className = 'validation-child-body';
+
+      const childResult = entry.result || createValidationResultFallback();
+      const statusInfo = document.createElement('p');
+      const childErrors = childResult.errors ? childResult.errors.length : 0;
+      const childWarnings = childResult.warnings ? childResult.warnings.length : 0;
+      statusInfo.textContent = `Errors: ${childErrors}, Warnings: ${childWarnings}`;
+      body.appendChild(statusInfo);
+
+      if (childResult.errors && childResult.errors.length) {
+        const errList = document.createElement('ul');
+        errList.className = 'validation-child-list validation-child-list--error';
+        childResult.errors.forEach((err) => {
+          const li = document.createElement('li');
+          li.textContent = err.message || '';
+          errList.appendChild(li);
+        });
+        body.appendChild(errList);
+      }
+      if (childResult.warnings && childResult.warnings.length) {
+        const warnList = document.createElement('ul');
+        warnList.className = 'validation-child-list validation-child-list--warning';
+        childResult.warnings.forEach((warn) => {
+          const li = document.createElement('li');
+          li.textContent = warn.message || '';
+          warnList.appendChild(li);
+        });
+        body.appendChild(warnList);
+      }
+
+      child.appendChild(body);
+      childList.appendChild(child);
+    });
+
+    childrenSection.appendChild(childList);
+    container.appendChild(childrenSection);
+  }
+
+  codeEl.className = 'validation-results';
+  codeEl.innerHTML = '';
+  codeEl.appendChild(container);
+}
+
+function createValidationResultFallback() {
+  return { errors: [], warnings: [], info: [] };
+}
+
 function restoreSnapshot(snapshot) {
   if (!snapshot) return;
   urlInput.value = snapshot.url || '';
@@ -1108,16 +1521,59 @@ function restoreSnapshot(snapshot) {
   lastLoadedMode = snapshot.mode || 'auto';
   lastLoadedContentType = snapshot.contentType || '';
   lastResponseMeta = snapshot.meta ? { ...snapshot.meta } : null;
+  if (snapshot.validation && snapshot.validation.result) {
+    currentValidationView = {
+      sourceMode: snapshot.validation.sourceMode || 'dash',
+      url: snapshot.validation.url || '',
+      result: {
+        errors: Array.isArray(snapshot.validation.result.errors)
+          ? snapshot.validation.result.errors.map((entry) => ({ ...entry }))
+          : [],
+        warnings: Array.isArray(snapshot.validation.result.warnings)
+          ? snapshot.validation.result.warnings.map((entry) => ({ ...entry }))
+          : [],
+        info: Array.isArray(snapshot.validation.result.info)
+          ? snapshot.validation.result.info.map((entry) => ({ ...entry }))
+          : [],
+      },
+    };
+  } else {
+    currentValidationView = null;
+  }
   renderLoadedView({
     mode: lastLoadedMode,
     text: lastLoadedText,
     buffer: lastLoadedBuffer,
     url: lastLoadedUrl,
     meta: lastResponseMeta,
+    validation: currentValidationView,
   });
 }
 
 function updateActionButtons(mode) {
+  copyManifestUrlBtn.removeAttribute('disabled');
+  copyManifestUrlBtn.title = '';
+  downloadManifestBtn.removeAttribute('disabled');
+  downloadManifestBtn.title = '';
+
+  if (mode === 'validation') {
+    copyManifestBtn.setAttribute('disabled', 'true');
+    copyManifestBtn.title = 'Copying is unavailable while viewing validation results.';
+    copyManifestBtn.textContent = '⧉ Copy Manifest as text';
+    copyManifestUrlBtn.setAttribute('disabled', 'true');
+    copyManifestUrlBtn.title = 'Copy manifest URL is unavailable while viewing validation results.';
+    downloadManifestBtn.setAttribute('disabled', 'true');
+    downloadManifestBtn.title = 'Downloading is unavailable while viewing validation results.';
+    downloadManifestBtn.textContent = '⇣ Download Manifest';
+    if (validateBtn) {
+      validateBtn.style.display = 'inline-flex';
+      validateBtn.disabled = false;
+      validateBtn.textContent = 'Return to Manifest';
+      validateBtn.title = 'Return to the manifest view';
+    }
+    return;
+  }
+
   const isBinary = mode === 'mp4' || mode === 'segments';
   if (isBinary) {
     copyManifestBtn.setAttribute('disabled', 'true');
@@ -1129,6 +1585,18 @@ function updateActionButtons(mode) {
   copyManifestBtn.textContent = '⧉ Copy Manifest as text';
   copyManifestUrlBtn.textContent = isBinary ? '⧉ Copy Segment URL' : '⧉ Copy Manifest URL';
   downloadManifestBtn.textContent = isBinary ? '⇣ Download Segment' : '⇣ Download Manifest';
+  if (validateBtn) {
+    if (mode === 'dash' || mode === 'hls') {
+      validateBtn.style.display = 'inline-flex';
+      validateBtn.disabled = false;
+      const modeLabel = mode === 'dash' ? 'DASH' : 'HLS';
+      validateBtn.textContent = `Validate ${modeLabel}`;
+      validateBtn.title = `Validate the loaded ${modeLabel} manifest`;
+    } else {
+      validateBtn.style.display = 'none';
+      validateBtn.disabled = true;
+    }
+  }
 }
 
 
@@ -1184,6 +1652,7 @@ async function load(options = {}) {
     lastLoadedBuffer = buffer;
     lastLoadedMode = mode;
     hasLoadedManifest = true;
+    currentValidationView = null;
 
     const meta = {
       status,
@@ -1200,6 +1669,7 @@ async function load(options = {}) {
       buffer,
       url,
       meta,
+      validation: null,
     });
 
     chrome.storage.sync.set({ customUA: ua });
@@ -1212,6 +1682,7 @@ async function load(options = {}) {
     lastLoadedMode = 'auto';
     lastLoadedContentType = '';
     lastResponseMeta = null;
+    currentValidationView = null;
     updateActionButtons(null);
     cleanupDashDecorations();
   }
@@ -1334,6 +1805,7 @@ const MP4_CONTAINER_BOXES = new Set([
   'mdia',
   'minf',
   'stbl',
+  'stsd',
   'edts',
   'mvex',
   'moof',
@@ -1572,7 +2044,7 @@ function parseMp4Structure(bytes) {
   const warnings = [];
   let idCounter = 0;
 
-  function parseRange(start, end, parentId) {
+  function parseRange(start, end, parentId, parentType) {
     const items = [];
     let offset = start;
     while (offset + 8 <= end) {
@@ -1638,8 +2110,9 @@ function parseMp4Structure(bytes) {
       box.details = details;
 
       const childStart = payloadOffset + Math.min(childOffset, payloadSize);
-      if (MP4_CONTAINER_BOXES.has(type) && childStart + 8 <= box.end) {
-        box.children = parseRange(childStart, box.end, box.id);
+      const isContainer = MP4_CONTAINER_BOXES.has(type) || parentType === 'stsd';
+      if (isContainer && childStart + 8 <= box.end) {
+        box.children = parseRange(childStart, box.end, box.id, type);
       }
 
       items.push(box);
@@ -1648,7 +2121,7 @@ function parseMp4Structure(bytes) {
     return items;
   }
 
-  const boxes = parseRange(0, bytes.length, null);
+  const boxes = parseRange(0, bytes.length, null, null);
   return { boxes, warnings };
 }
 
@@ -1724,6 +2197,61 @@ function extractBoxDetails(box, view, bytes, payloadOffset, payloadSize) {
     if (!result) result = String.fromCharCode(...slice);
     // eslint-disable-next-line no-control-regex -- explicit removal of trailing NUL bytes
     return result.replace(/\u0000+$/, '');
+  };
+
+  const parseVisualSampleEntry = () => {
+    if (!skipBytes(6)) return;
+    const dataRefIndex = readUint16();
+    if (dataRefIndex !== null) addDetail('data_reference_index', dataRefIndex);
+    skipBytes(2); // pre_defined
+    skipBytes(2); // reserved
+    skipBytes(12); // pre_defined/reserved
+    const width = readUint16();
+    const height = readUint16();
+    if (width !== null) addDetail('width', width);
+    if (height !== null) addDetail('height', height);
+    const horiz = readUint32();
+    if (horiz !== null) addDetail('horiz_resolution', formatFixed1616(horiz));
+    const vert = readUint32();
+    if (vert !== null) addDetail('vert_resolution', formatFixed1616(vert));
+    skipBytes(4); // reserved
+    const frameCount = readUint16();
+    if (frameCount !== null) addDetail('frame_count', frameCount);
+    if (ensure(32)) {
+      const nameLength = bytes[cursor];
+      const rawName = bytes.subarray(cursor + 1, cursor + 1 + Math.min(nameLength, 31));
+      const compressor = String.fromCharCode(...rawName).replace(/\u0000+$/, '');
+      cursor += 32;
+      remaining -= 32;
+      if (compressor) addDetail('compressor_name', compressor);
+    } else {
+      skipBytes(32);
+    }
+    const depth = readUint16();
+    if (depth !== null) addDetail('depth', depth);
+    skipBytes(2); // pre_defined
+    markChildOffset();
+  };
+
+  const parseAudioSampleEntry = () => {
+    if (!skipBytes(6)) return;
+    const dataRefIndex = readUint16();
+    if (dataRefIndex !== null) addDetail('data_reference_index', dataRefIndex);
+    const version = readUint16();
+    if (version !== null) addDetail('version', version);
+    skipBytes(2); // revision level
+    skipBytes(4); // vendor
+    const channelCount = readUint16();
+    if (channelCount !== null) addDetail('channel_count', channelCount);
+    const sampleSize = readUint16();
+    if (sampleSize !== null) addDetail('sample_size', sampleSize);
+    skipBytes(4); // pre_defined + reserved
+    const sampleRateRaw = readUint32();
+    if (sampleRateRaw !== null) {
+      const sampleRate = Math.round(sampleRateRaw / 65536);
+      addDetail('sample_rate', sampleRate);
+    }
+    markChildOffset();
   };
 
   const markChildOffset = () => {
@@ -1851,6 +2379,14 @@ function extractBoxDetails(box, view, bytes, payloadOffset, payloadSize) {
         const name = readString(remaining);
         if (name) addDetail('name', name);
       }
+      markChildOffset();
+      break;
+    }
+    case 'stsd': {
+      const full = readFullBoxHeader();
+      if (!full) break;
+      const entryCount = readUint32();
+      if (entryCount !== null) addDetail('entry_count', entryCount);
       markChildOffset();
       break;
     }
@@ -1992,6 +2528,221 @@ function extractBoxDetails(box, view, bytes, payloadOffset, payloadSize) {
         cursor += dataSize;
         remaining -= dataSize;
         addDetail('data_size', `${dataSize.toLocaleString()} bytes`);
+      }
+      markChildOffset();
+      break;
+    }
+    case 'encv':
+    case 'avc1':
+    case 'avc3':
+    case 'hvc1':
+    case 'hev1':
+    case 'mp4v':
+    case 's263':
+    case 'vp08':
+    case 'vp09': {
+      parseVisualSampleEntry();
+      break;
+    }
+    case 'enca':
+    case 'mp4a':
+    case 'ac-3':
+    case 'ec-3':
+    case 'ac-4':
+    case 'dtsc':
+    case 'dtse':
+    case 'dtsh':
+    case 'dtsl': {
+      parseAudioSampleEntry();
+      break;
+    }
+    case 'hvcC': {
+      const configurationVersion = readUint8();
+      if (configurationVersion !== null) addDetail('configuration_version', configurationVersion);
+      const profileData = readUint8();
+      if (profileData !== null) {
+        const profileSpace = profileData >> 6;
+        const tierFlag = (profileData >> 5) & 0x01;
+        const profileIdc = profileData & 0x1f;
+        addDetail('profile_space', profileSpace);
+        addDetail('tier_flag', tierFlag);
+        addDetail('profile_idc', profileIdc);
+      }
+      const compatibility = readUint32();
+      if (compatibility !== null) addDetail('profile_compatibility', formatHex(compatibility));
+      if (ensure(6)) {
+        const constraintBytes = bytes.subarray(cursor, cursor + 6);
+        cursor += 6;
+        remaining -= 6;
+        const constraintHex = Array.from(constraintBytes, (b) => b.toString(16).padStart(2, '0')).join('');
+        addDetail('constraint_indicator', `0x${constraintHex}`);
+      }
+      const levelIdc = readUint8();
+      if (levelIdc !== null) addDetail('level_idc', levelIdc);
+      const segmentation = readUint16();
+      if (segmentation !== null) addDetail('min_spatial_segmentation_idc', segmentation & 0x0fff);
+      const parallelism = readUint8();
+      if (parallelism !== null) addDetail('parallelism_type', parallelism & 0x03);
+      const chromaByte = readUint8();
+      if (chromaByte !== null) addDetail('chroma_format', chromaByte & 0x03);
+      const bitDepthLuma = readUint8();
+      if (bitDepthLuma !== null) addDetail('bit_depth_luma', (bitDepthLuma & 0x07) + 8);
+      const bitDepthChroma = readUint8();
+      if (bitDepthChroma !== null) addDetail('bit_depth_chroma', (bitDepthChroma & 0x07) + 8);
+      const averageFrameRate = readUint16();
+      if (averageFrameRate !== null) addDetail('average_frame_rate', averageFrameRate);
+      const temporalInfo = readUint8();
+      if (temporalInfo !== null) {
+        addDetail('constant_frame_rate', temporalInfo >> 6);
+        addDetail('num_temporal_layers', (temporalInfo >> 3) & 0x07);
+        addDetail('temporal_id_nested', (temporalInfo >> 2) & 0x01);
+        addDetail('nalu_length_size', (temporalInfo & 0x03) + 1);
+      }
+      const numArrays = readUint8();
+      if (numArrays !== null) {
+        addDetail('array_count', numArrays);
+        let totalNalUnits = 0;
+        for (let i = 0; i < numArrays; i++) {
+          if (!ensure(3)) break;
+          const arrayHeader = readUint8();
+          if (arrayHeader === null) break;
+          const numNalus = readUint16();
+          if (numNalus === null) break;
+          for (let j = 0; j < numNalus; j++) {
+            const nalSize = readUint16();
+            if (nalSize === null) {
+              remaining = 0;
+              break;
+            }
+            if (!skipBytes(nalSize)) {
+              remaining = 0;
+              break;
+            }
+            totalNalUnits += 1;
+          }
+        }
+        addDetail('total_nalus', totalNalUnits);
+      }
+      break;
+    }
+    case 'fiel': {
+      const fieldCount = readUint8();
+      const fieldOrdering = readUint8();
+      if (fieldCount !== null) addDetail('field_count', fieldCount);
+      if (fieldOrdering !== null) addDetail('field_order', fieldOrdering);
+      break;
+    }
+    case 'colr': {
+      const colourType = readString(4);
+      if (colourType) addDetail('colour_type', `'${colourType}'`);
+      if (colourType === 'nclc' || colourType === 'nclx') {
+        const primaries = readUint16();
+        const transfer = readUint16();
+        const matrix = readUint16();
+        if (primaries !== null) addDetail('colour_primaries', primaries);
+        if (transfer !== null) addDetail('transfer_characteristics', transfer);
+        if (matrix !== null) addDetail('matrix_coefficients', matrix);
+        if (colourType === 'nclx') {
+          const fullRange = readUint8();
+          if (fullRange !== null) addDetail('full_range_flag', (fullRange >> 7) & 0x01);
+        }
+      } else if (remaining > 0) {
+        addDetail('payload_bytes', `${remaining.toLocaleString()} bytes`);
+        skipBytes(remaining);
+      }
+      break;
+    }
+    case 'pasp': {
+      const hSpacing = readUint32();
+      const vSpacing = readUint32();
+      if (hSpacing !== null) addDetail('h_spacing', hSpacing);
+      if (vSpacing !== null) addDetail('v_spacing', vSpacing);
+      break;
+    }
+    case 'btrt': {
+      const bufferSize = readUint32();
+      const maxBitrate = readUint32();
+      const avgBitrate = readUint32();
+      if (bufferSize !== null) addDetail('buffer_size_db', bufferSize);
+      if (maxBitrate !== null) addDetail('max_bitrate', maxBitrate);
+      if (avgBitrate !== null) addDetail('avg_bitrate', avgBitrate);
+      break;
+    }
+    case 'frma': {
+      const original = readString(4);
+      if (original) addDetail('original_format', `'${original}'`);
+      break;
+    }
+    case 'schm': {
+      const full = readFullBoxHeader();
+      if (!full) break;
+      const schemeType = readString(4);
+      if (schemeType) addDetail('scheme_type', `'${schemeType}'`);
+      const schemeVersion = readUint32();
+      if (schemeVersion !== null) addDetail('scheme_version', schemeVersion);
+      if (full.flags & 0x000001) {
+        const uri = readString(remaining);
+        if (uri) addDetail('scheme_uri', uri);
+      }
+      markChildOffset();
+      break;
+    }
+    case 'tenc': {
+      const full = readFullBoxHeader();
+      if (!full) break;
+      if (full.version === 1) {
+        const cryptBlock = readUint8();
+        const skipBlock = readUint8();
+        const isProtected = readUint8();
+        const perSample = readUint8();
+        if (cryptBlock !== null) addDetail('default_crypt_byte_block', cryptBlock);
+        if (skipBlock !== null) addDetail('default_skip_byte_block', skipBlock);
+        if (isProtected !== null) addDetail('default_isProtected', isProtected);
+        if (perSample !== null) addDetail('default_Per_Sample_IV_Size', perSample);
+        if (ensure(16)) {
+          const kidBytes = bytes.subarray(cursor, cursor + 16);
+          cursor += 16;
+          remaining -= 16;
+          addDetail('default_KID', formatUuid(kidBytes));
+        }
+        if (isProtected === 1 && perSample === 0) {
+          const constantIvSize = readUint8();
+          if (constantIvSize !== null) {
+            addDetail('default_constant_IV_size', constantIvSize);
+            if (ensure(constantIvSize)) {
+              const ivBytes = bytes.subarray(cursor, cursor + constantIvSize);
+              cursor += constantIvSize;
+              remaining -= constantIvSize;
+              const ivHex = Array.from(ivBytes, (b) => b.toString(16).padStart(2, '0')).join(' ');
+              addDetail('default_constant_IV', `[${ivHex}]`);
+            }
+          }
+        }
+      } else {
+        skipBytes(1); // reserved
+        const isProtected = readUint8();
+        if (isProtected !== null) addDetail('default_isProtected', isProtected);
+        const perSample = readUint8();
+        if (perSample !== null) addDetail('default_Per_Sample_IV_Size', perSample);
+        if (ensure(16)) {
+          const kidBytes = bytes.subarray(cursor, cursor + 16);
+          cursor += 16;
+          remaining -= 16;
+          addDetail('default_KID', formatUuid(kidBytes));
+        }
+        if (perSample === 0) {
+          const constantIvSize = readUint8();
+          if (constantIvSize !== null) {
+            addDetail('default_constant_IV_size', constantIvSize);
+            if (ensure(constantIvSize)) {
+              const ivBytes = bytes.subarray(cursor, cursor + constantIvSize);
+              cursor += constantIvSize;
+              remaining -= constantIvSize;
+              const ivHex = Array.from(ivBytes, (b) => b.toString(16).padStart(2, '0')).join(' ');
+              addDetail('default_constant_IV', `[${ivHex}]`);
+            }
+          }
+        }
       }
       markChildOffset();
       break;
