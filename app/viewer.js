@@ -1027,6 +1027,7 @@ function renderMeta({ status, contentType, bytes, mode, durationMs, totalDuratio
   const finiteTotal = Number.isFinite(totalDurationMs) ? totalDurationMs : null;
   const derivedProcessing = Number.isFinite(processingMs) ? processingMs : null;
   if (finiteResponse !== null) add('Response time', `${formatDuration(finiteResponse)}`);
+  if (finiteTotal !== null && finiteTotal > 0) add('Total time', `${formatDuration(finiteTotal)}`);
   if (derivedProcessing !== null && derivedProcessing > 1) add('Processing time', `${formatDuration(derivedProcessing)}`);
 }
 
@@ -1054,7 +1055,7 @@ function pushCurrentState() {
   updateBackButton();
 }
 
-function renderLoadedView({ mode, text, buffer, url, contentType, meta }) {
+function renderLoadedView({ mode, text, buffer, url, meta }) {
   cleanupDashDecorations();
   if (mode === 'dash') {
     codeEl.className = 'language-plain';
@@ -1112,7 +1113,6 @@ function restoreSnapshot(snapshot) {
     text: lastLoadedText,
     buffer: lastLoadedBuffer,
     url: lastLoadedUrl,
-    contentType: lastLoadedContentType,
     meta: lastResponseMeta,
   });
 }
@@ -1199,7 +1199,6 @@ async function load(options = {}) {
       text,
       buffer,
       url,
-      contentType,
       meta,
     });
 
@@ -1635,7 +1634,7 @@ function parseMp4Structure(bytes) {
       const payloadOffset = offset + headerSize;
       const payloadSize = Math.max(0, box.end - payloadOffset);
 
-      const { details, childOffset } = extractBoxDetails(box, view, bytes, payloadOffset, payloadSize, warnings);
+      const { details, childOffset } = extractBoxDetails(box, view, bytes, payloadOffset, payloadSize);
       box.details = details;
 
       const childStart = payloadOffset + Math.min(childOffset, payloadSize);
@@ -1653,7 +1652,7 @@ function parseMp4Structure(bytes) {
   return { boxes, warnings };
 }
 
-function extractBoxDetails(box, view, bytes, payloadOffset, payloadSize, warnings) {
+function extractBoxDetails(box, view, bytes, payloadOffset, payloadSize) {
   const details = [];
   let cursor = payloadOffset;
   let remaining = payloadSize;
@@ -1723,6 +1722,7 @@ function extractBoxDetails(box, view, bytes, payloadOffset, payloadSize, warning
       }
     }
     if (!result) result = String.fromCharCode(...slice);
+    // eslint-disable-next-line no-control-regex -- explicit removal of trailing NUL bytes
     return result.replace(/\u0000+$/, '');
   };
 
@@ -2109,6 +2109,7 @@ if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     formatDuration,
     isLikelyMp4,
+    detectMode,
     deriveManifestBase,
     resolveAgainstBase,
     parseRepeatCount,
@@ -2117,5 +2118,7 @@ if (typeof module !== 'undefined' && module.exports) {
     formatHex,
     decodeIso639,
     formatUuid,
+    buildDashData,
+    parseMp4Structure,
   };
 }
