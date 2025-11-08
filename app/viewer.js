@@ -2220,7 +2220,9 @@ function extractBoxDetails(box, view, bytes, payloadOffset, payloadSize) {
     if (ensure(32)) {
       const nameLength = bytes[cursor];
       const rawName = bytes.subarray(cursor + 1, cursor + 1 + Math.min(nameLength, 31));
-      const compressor = String.fromCharCode(...rawName).replace(/\u0000+$/, '');
+      let compressor = String.fromCharCode(...rawName);
+      const nullPos = compressor.indexOf('\0');
+      if (nullPos !== -1) compressor = compressor.slice(0, nullPos);
       cursor += 32;
       remaining -= 32;
       if (compressor) addDetail('compressor_name', compressor);
