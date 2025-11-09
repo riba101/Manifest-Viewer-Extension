@@ -2858,6 +2858,21 @@ function formatDetailDisplay(value) {
 // Auto-load if URL provided
 if (urlInput.value) load();
 
+
+(function loadVersion() {
+  const versionEl = document.getElementById('viewer-version');
+  if (versionEl) {
+    try {
+      // Get the version from the manifest
+      const manifest = chrome.runtime.getManifest();
+      versionEl.textContent = manifest.version || '...';
+    } catch (e) {
+      console.error("Failed to load manifest version", e);
+      versionEl.textContent = 'N/A';
+    }
+  }
+})();
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     formatDuration,

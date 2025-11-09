@@ -5,6 +5,20 @@ document.addEventListener('DOMContentLoaded', () => {
   const saveBtn      = document.getElementById('saveUA');
   const autoOpenEl   = document.getElementById('autoOpenToggle');
 
+
+  const versionEl    = document.getElementById('popup-version');
+  
+  if (versionEl) {
+    try {
+      // Get the version from the manifest
+      const manifest = chrome.runtime.getManifest();
+      versionEl.textContent = manifest.version || '...';
+    } catch (e) {
+      console.error("Failed to load manifest version", e);
+      versionEl.textContent = 'N/A';
+    }
+  }
+
   // Guard: log a clear error if markup changed
   const req = { urlEl, uaEl, openBtn, saveBtn, autoOpenEl };
   Object.entries(req).forEach(([k, v]) => {
