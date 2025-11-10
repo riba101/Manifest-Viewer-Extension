@@ -25,6 +25,12 @@
   function isComment(line) {
     return /^#/i.test(line.trim());
   }
+  
+  // Helper to safely get the substring after the first colon (the attributes)
+  const getAttrs = (line) => {
+      const colonIndex = line.indexOf(':');
+      return colonIndex === -1 ? '' : line.substring(colonIndex + 1);
+  };
 
   function parseAttributeList(raw) {
     const attrs = {};
@@ -51,6 +57,42 @@
       result.errors.push({ message: 'Manifest is empty.', line: null });
       return result;
     }
+
+    // --- HLS Version Validator Variables (CORRECTED & COMPLETE) ---
+    let declaredVersion = 1; // Default HLS version is 1
+    let minRequiredVersion = 1;
+    let versionNotes = []; // To track which features bumped the version
+
+    // Updated version requirements table (includes V7 and V9 tags)
+    const versionRequirements = {
+      'Floating-point EXTINF duration': 3,
+      'EXT-X-BYTERANGE': 4,
+      'EXT-X-I-FRAME-STREAM-INF': 4,
+      'EXT-X-STREAM-INF with AUDIO/VIDEO attributes': 4,
+      'EXT-X-MAP': 5,
+      'EXT-X-MEDIA with TYPE=SUBTITLES': 5,
+      'EXT-X-MEDIA with TYPE=CLOSED-CAPTIONS': 6,
+      'EXT-X-DATERANGE': 7,
+      'EXT-X-INDEPENDENT-SEGMENTS': 7, 
+      'HLS V7 Attributes on EXT-X-STREAM-INF (e.g. AVERAGE-BANDWIDTH, FRAME-RATE, STABLE-VARIANT-ID, CHANNELS)': 7,
+      'HLS V7 Attributes on EXT-X-MEDIA (e.g. CHANNELS, STABLE-RENDITION-ID)': 7,
+      'EXT-X-TAG with VIDEO-RANGE attribute': 8, 
+      'EXT-X-CONTENT-STEERING': 9, // HLS V9 requirement
+    };
+    
+    // Helper to update the minimum required version
+    const updateRequiredVersion = (feature, version, line) => {
+        if (version > minRequiredVersion) {
+            minRequiredVersion = version;
+            versionNotes = [{ feature, version, line }];
+        } else if (version === minRequiredVersion) {
+            if (!versionNotes.find(n => n.feature === feature)) {
+                versionNotes.push({ feature, version, line });
+            }
+        }
+    }
+    // --- End HLS Version Validator Variables ---
+
 
     const lines = normalizeNewlines(manifest).split('\n');
     const firstLine = (lines[0] || '').trim().toUpperCase();
@@ -96,19 +138,42 @@
             if (!Number.isFinite(duration) || duration < 0) {
               result.warnings.push({ message: '#EXTINF duration is not a valid number.', line: lineNumber });
             }
+            
+            // HLS V3 Check: Floating-point duration
+            if (duration !== null && duration % 1 !== 0) {
+                updateRequiredVersion('Floating-point EXTINF duration', versionRequirements['Floating-point EXTINF duration'], lineNumber);
+            }
           }
         } else if (line.startsWith('#EXT-X-STREAM-INF')) {
           encounteredStreamInf += 1;
           pendingDirective = { type: 'variant', line: lineNumber };
-          if (!/BANDWIDTH=/i.test(line)) {
+          
+          const attrs = parseAttributeList(getAttrs(line));
+          if (!attrs.BANDWIDTH) {
             result.warnings.push({
               message: '#EXT-X-STREAM-INF is missing the BANDWIDTH attribute.',
               line: lineNumber,
             });
           }
+          // HLS V4 Checks
+          if (attrs.AUDIO || attrs.VIDEO) {
+             updateRequiredVersion('EXT-X-STREAM-INF with AUDIO/VIDEO attributes', versionRequirements['EXT-X-STREAM-INF with AUDIO/VIDEO attributes'], lineNumber);
+          }
+          // HLS V7 Checks (COMBINED: CHANNELS/HDCP-LEVEL, AVERAGE-BANDWIDTH, FRAME-RATE, STABLE-VARIANT-ID)
+          if (attrs.CHANNELS || attrs['HDCP-LEVEL'] || attrs['AVERAGE-BANDWIDTH'] || attrs['FRAME-RATE'] || attrs['STABLE-VARIANT-ID']) {
+            updateRequiredVersion('HLS V7 Attributes on EXT-X-STREAM-INF (e.g. AVERAGE-BANDWIDTH, FRAME-RATE, STABLE-VARIANT-ID, CHANNELS)', versionRequirements['HLS V7 Attributes on EXT-X-STREAM-INF (e.g. AVERAGE-BANDWIDTH, FRAME-RATE, STABLE-VARIANT-ID, CHANNELS)'], lineNumber);
+          }
+          // HLS V8 Checks
+          if (attrs['VIDEO-RANGE']) {
+              updateRequiredVersion('EXT-X-TAG with VIDEO-RANGE attribute', versionRequirements['EXT-X-TAG with VIDEO-RANGE attribute'], lineNumber);
+          }
+
         } else if (line.startsWith('#EXT-X-I-FRAME-STREAM-INF')) {
           encounteredStreamInf += 1;
-          const attrs = parseAttributeList(line);
+          
+          const attrs = parseAttributeList(getAttrs(line));
+          updateRequiredVersion('EXT-X-I-FRAME-STREAM-INF', versionRequirements['EXT-X-I-FRAME-STREAM-INF'], lineNumber);
+          
           if (attrs && attrs.URI) variantEntries.push({ uri: attrs.URI, line: lineNumber });
           if (!attrs || !attrs.BANDWIDTH) {
             result.warnings.push({
@@ -116,14 +181,33 @@
               line: lineNumber,
             });
           }
+          if (attrs['VIDEO-RANGE']) {
+              updateRequiredVersion('EXT-X-TAG with VIDEO-RANGE attribute', versionRequirements['EXT-X-TAG with VIDEO-RANGE attribute'], lineNumber);
+          }
         } else if (line.startsWith('#EXT-X-MEDIA')) {
-          const attrs = parseAttributeList(line);
+          const attrs = parseAttributeList(getAttrs(line)); 
+          
+          // HLS V5/V6 Checks
+          if (attrs.TYPE === 'SUBTITLES') {
+             updateRequiredVersion('EXT-X-MEDIA with TYPE=SUBTITLES', versionRequirements['EXT-X-MEDIA with TYPE=SUBTITLES'], lineNumber);
+          }
+          if (attrs.TYPE === 'CLOSED-CAPTIONS') {
+             updateRequiredVersion('EXT-X-MEDIA with TYPE=CLOSED-CAPTIONS', versionRequirements['EXT-X-MEDIA with TYPE=CLOSED-CAPTIONS'], lineNumber);
+          }
+          // HLS V7 Checks (CHANNELS/STABLE-RENDITION-ID)
+          if (attrs.CHANNELS || attrs['STABLE-RENDITION-ID']) {
+             updateRequiredVersion('HLS V7 Attributes on EXT-X-MEDIA (e.g. CHANNELS, STABLE-RENDITION-ID)', versionRequirements['HLS V7 Attributes on EXT-X-MEDIA (e.g. CHANNELS, STABLE-RENDITION-ID)'], lineNumber);
+          }
+
+
           if (attrs && attrs.URI) mediaPlaylistUris.push({ uri: attrs.URI, line: lineNumber });
         } else if (line.startsWith('#EXT-X-VERSION')) {
           versionSeen = true;
           const value = line.split(':')[1];
           const parsed = Number.parseInt((value || '').trim(), 10);
-          if (!Number.isInteger(parsed) || parsed <= 0) {
+          if (Number.isInteger(parsed) && parsed >= 1) {
+             declaredVersion = parsed;
+          } else {
             result.errors.push({ message: '#EXT-X-VERSION must be a positive integer.', line: lineNumber });
           }
         } else if (line.startsWith('#EXT-X-TARGETDURATION')) {
@@ -132,6 +216,16 @@
           if (!Number.isInteger(parsed) || parsed <= 0) {
             result.errors.push({ message: '#EXT-X-TARGETDURATION must be a positive integer.', line: lineNumber });
           }
+        } else if (line.startsWith('#EXT-X-BYTERANGE')) {
+             updateRequiredVersion('EXT-X-BYTERANGE', versionRequirements['EXT-X-BYTERANGE'], lineNumber);
+        } else if (line.startsWith('#EXT-X-MAP')) {
+             updateRequiredVersion('EXT-X-MAP', versionRequirements['EXT-X-MAP'], lineNumber);
+        } else if (line.startsWith('#EXT-X-DATERANGE')) {
+             updateRequiredVersion('EXT-X-DATERANGE', versionRequirements['EXT-X-DATERANGE'], lineNumber);
+        } else if (line.startsWith('#EXT-X-INDEPENDENT-SEGMENTS')) {
+             updateRequiredVersion('EXT-X-INDEPENDENT-SEGMENTS', versionRequirements['EXT-X-INDEPENDENT-SEGMENTS'], lineNumber);
+        } else if (line.startsWith('#EXT-X-CONTENT-STEERING')) {
+             updateRequiredVersion('EXT-X-CONTENT-STEERING', versionRequirements['EXT-X-CONTENT-STEERING'], lineNumber);
         }
         return;
       }
@@ -153,10 +247,30 @@
         line: pendingDirective.line,
       });
     }
-
-    if (!versionSeen) {
-      result.warnings.push({ message: 'Manifest is missing #EXT-X-VERSION tag.', line: null });
+    
+    // --- HLS Version Validation Final Check (FIXED) ---
+    if (minRequiredVersion > declaredVersion) {
+        const uniqueFeatures = [...new Set(versionNotes.filter(n => n.version === minRequiredVersion).map(n => n.feature))];
+        const featureList = uniqueFeatures.join(', ');
+            
+        result.errors.push({
+            message: `Manifest declares #EXT-X-VERSION:${declaredVersion}, but requires at least version ${minRequiredVersion} to support the tags/attributes: ${featureList}.`,
+            line: null,
+        });
+    } else if (declaredVersion > 1) {
+         result.info.push({
+            message: `Manifest declares #EXT-X-VERSION:${declaredVersion}. Minimal required version based on tags used is ${minRequiredVersion}.`,
+            line: null,
+        });
+    } else {
+        // This is the message for when #EXT-X-VERSION is completely missing
+        result.info.push({
+            message: `Manifest does not explicitly declare #EXT-X-VERSION. Assumed version is ${declaredVersion}. Minimal required version based on tags used is ${minRequiredVersion}.`,
+            line: null,
+        });
     }
+    // -----------------------------------------------------
+
     const hasEndlist = lines.some((line) => line.trim().toUpperCase() === '#EXT-X-ENDLIST');
 
     const inferredType =
@@ -315,7 +429,6 @@
     const mpd = doc.documentElement;
     if (!mpd || mpd.localName !== 'MPD') {
       result.errors.push({ message: 'Root element must be <MPD>.', line: null });
-      return result;
     }
 
     const periods = Array.from(mpd.getElementsByTagNameNS('*', 'Period'));
