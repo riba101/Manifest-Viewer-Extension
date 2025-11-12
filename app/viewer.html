@@ -19,7 +19,7 @@
           <option value="json">JSON</option>
           <option value="segments">Segments (MP4)</option>
         </select>
-        <input id="ua" type="text" placeholder="Custom User-Agent (optional)" />
+        <button id="editHeaders" title="Configure custom headers">Custom Headers</button>
         <button id="refresh" title="Fetch / Refresh">↻ Refresh</button>
         <button id="copyManifestUrl" title="Copy manifest URL">⧉ Copy Manifest URL</button>
         <button id="copyManifest" title="Copy manifest text">⧉ Copy Manifest as text</button>
@@ -29,6 +29,83 @@
         <button id="toggleTheme" title="Toggle theme">☀️/🌙</button>
       </div>
     </header>
+
+    <div id="headersPanel" class="headers-panel" hidden>
+      <div
+        class="headers-panel__dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="headersPanelTitle"
+      >
+        <div class="headers-panel__header">
+          <h2 id="headersPanelTitle">Additional Request Headers</h2>
+          <button
+            id="headersClose"
+            class="headers-panel__close"
+            type="button"
+            aria-label="Close headers panel"
+          >
+            ✕
+          </button>
+        </div>
+        <p class="headers-panel__description">
+          Configure any additional headers that will be sent with each request.
+        </p>
+        <div class="headers-panel__table-wrapper">
+          <table class="headers-table" aria-describedby="headersPanelTitle">
+            <thead>
+              <tr>
+                <th scope="col">Header</th>
+                <th scope="col">Value</th>
+                <th scope="col" class="headers-table__actions-col" aria-label="Actions"></th>
+              </tr>
+            </thead>
+            <tbody id="headersRows">
+              <tr class="headers-row" data-row-type="ua">
+                <td>
+                  <input
+                    id="uaName"
+                    class="headers-table__input"
+                    type="text"
+                    value="User-Agent"
+                    disabled
+                    aria-label="User-Agent header name"
+                  />
+                </td>
+                <td>
+                  <input
+                    id="ua"
+                    class="headers-table__input headers-value"
+                    type="text"
+                    placeholder="e.g. ExoPlayerDemo/1.0"
+                    aria-label="User-Agent header value"
+                  />
+                </td>
+                <td class="headers-table__actions">
+                  <button
+                    class="headers-remove"
+                    type="button"
+                    disabled
+                    title="User-Agent header is always included"
+                    aria-label="User-Agent header is required"
+                  >
+                    ✕
+                  </button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <button id="headersAdd" class="headers-panel__add" type="button">+ Add Header</button>
+        <div id="headersError" class="headers-panel__error" role="alert" aria-live="polite"></div>
+        <div class="headers-panel__actions">
+          <button id="headersClear" type="button">Clear</button>
+          <span class="headers-panel__spacer" aria-hidden="true"></span>
+          <button id="headersCancel" type="button">Cancel</button>
+          <button id="headersSave" class="headers-panel__save" type="button">Save</button>
+        </div>
+      </div>
+    </div>
 
     <main>
   <section class="pane">
@@ -49,7 +126,12 @@
         <a href="https://github.com/riba101/Manifest-Viewer-Extension" 
            target="_blank" 
            rel="noopener noreferrer" 
-           style="color: var(--acc1); text-decoration: underline;">GitHub</a>
+           aria-label="GitHub repository"
+           style="color: #fff; text-decoration: none; display: inline-flex; align-items: center;">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="1em" height="1em" fill="currentColor" aria-hidden="true" focusable="false">
+            <path d="M8 0C3.58 0 0 3.58 0 8a8 8 0 005.47 7.59c.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.001 8.001 0 0016 8c0-4.42-3.58-8-8-8z"></path>
+          </svg>
+        </a>
       </small>
     </footer>
 

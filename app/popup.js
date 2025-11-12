@@ -1,8 +1,7 @@
 document.addEventListener('DOMContentLoaded', () => {
   const urlEl        = document.getElementById('url');
-  const uaEl         = document.getElementById('ua');
   const openBtn      = document.getElementById('open');
-  const saveBtn      = document.getElementById('saveUA');
+  const saveBtn      = document.getElementById('saveSettings');
   const autoOpenEl   = document.getElementById('autoOpenToggle');
 
 
@@ -20,22 +19,20 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // Guard: log a clear error if markup changed
-  const req = { urlEl, uaEl, openBtn, saveBtn, autoOpenEl };
+  const req = { urlEl, openBtn, saveBtn, autoOpenEl };
   Object.entries(req).forEach(([k, v]) => {
     if (!v) console.error(`[popup] Missing element: ${k} (check popup.html IDs)`);
   });
 
   // Load saved settings (default autoOpenViewer = true)
-  chrome.storage.sync.get({ customUA: "", autoOpenViewer: true }, (res) => {
-    if (uaEl) uaEl.value = res.customUA || "";
+  chrome.storage.sync.get({ autoOpenViewer: true }, (res) => {
     if (autoOpenEl) autoOpenEl.checked = !!res.autoOpenViewer;
   });
 
-  // Save defaults (UA + auto-open)
+  // Save defaults (auto-open)
   if (saveBtn) {
     saveBtn.addEventListener('click', () => {
       chrome.storage.sync.set({
-        customUA: uaEl ? uaEl.value.trim() : "",
         autoOpenViewer: autoOpenEl ? autoOpenEl.checked : true
       });
     });
@@ -44,11 +41,11 @@ document.addEventListener('DOMContentLoaded', () => {
   // Open viewer tab
   function openViewer() {
     const url = urlEl ? urlEl.value.trim() : "";
-    const ua  = uaEl ? uaEl.value.trim() : "";
     const q = new URLSearchParams();
     if (url) q.set('u', url);
-    if (ua)  q.set('ua', ua);
-    chrome.tabs.create({ url: chrome.runtime.getURL(`viewer.html?${q.toString()}`) });
+    const query = q.toString();
+    const viewerUrl = query ? `viewer.html?${query}` : 'viewer.html';
+    chrome.tabs.create({ url: chrome.runtime.getURL(viewerUrl) });
   }
 
   if (openBtn) openBtn.addEventListener('click', openViewer);

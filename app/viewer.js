@@ -11,6 +11,15 @@ const validateBtn = $('validateManifest');
 const codeEl = $('code');
 const metaEl = $('meta');
 const toggleThemeBtn = $('toggleTheme');
+const headersBtn = $('editHeaders');
+const headersPanel = $('headersPanel');
+const headersSaveBtn = $('headersSave');
+const headersCancelBtn = $('headersCancel');
+const headersClearBtn = $('headersClear');
+const headersCloseBtn = $('headersClose');
+const headersErrorEl = $('headersError');
+const headersRowsContainer = $('headersRows');
+const headersAddBtn = $('headersAdd');
 const entityDecoder = document.createElement('textarea');
 let lastLoadedUrl = '';
 let lastLoadedText = '';
@@ -21,16 +30,27 @@ let lastLoadedContentType = '';
 let lastResponseMeta = null;
 const navigationStack = [];
 let currentValidationView = null;
+const HEADERS_STORAGE_KEY = 'mv_custom_headers_v1';
+const RESERVED_HEADER_NAMES = new Set(['user-agent']);
+const HEADER_NAME_PATTERN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+let customHeaderEntries = [];
+let isHeadersPanelOpen = false;
 
 // Init from query params
 const params = new URLSearchParams(location.search);
 if (params.get('u')) urlInput.value = params.get('u');
 if (params.get('ua')) uaInput.value = params.get('ua');
+if (uaInput && !uaInput.value) uaInput.value = navigator.userAgent || '';
 
 // Load default UA if not present
-if (!uaInput.value) {
+if (uaInput && !uaInput.value) {
   chrome.runtime.sendMessage({ type: 'GET_UA' }, (res) => {
-    if (res && res.ua) uaInput.value = res.ua;
+    if (res && typeof res.ua === 'string' && res.ua.trim()) {
+      uaInput.value = res.ua;
+    } else if (!uaInput.value) {
+      uaInput.value = navigator.userAgent || '';
+    }
+    updateHeadersButtonLabel();
   });
 }
 
@@ -52,6 +72,338 @@ toggleThemeBtn.addEventListener('click', () => {
   setTheme(next);
   localStorage.setItem('mv_theme', next);
 });
+
+loadStoredHeaders();
+updateHeadersButtonLabel();
+
+if (headersBtn) headersBtn.addEventListener('click', openHeadersPanel);
+if (headersSaveBtn) headersSaveBtn.addEventListener('click', handleHeadersSave);
+if (headersCancelBtn) headersCancelBtn.addEventListener('click', () => {
+  closeHeadersPanel();
+});
+if (headersClearBtn)
+  headersClearBtn.addEventListener('click', () => {
+    if (headersErrorEl) headersErrorEl.textContent = '';
+    setCustomHeaders([]);
+    if (uaInput) {
+      uaInput.value = navigator.userAgent || '';
+    }
+    focusFirstHeaderInput();
+  });
+if (headersCloseBtn) headersCloseBtn.addEventListener('click', closeHeadersPanel);
+if (headersPanel) {
+  headersPanel.addEventListener('click', (event) => {
+    if (event.target === headersPanel) {
+      closeHeadersPanel();
+    }
+  });
+}
+if (headersAddBtn) headersAddBtn.addEventListener('click', () => {
+  const row = addHeaderRow();
+  if (row) {
+    const nameInput = row.querySelector('.headers-name');
+    if (nameInput) nameInput.focus();
+  }
+});
+if (headersRowsContainer) {
+  headersRowsContainer.addEventListener('click', (event) => {
+    const button = event.target.closest('.headers-remove');
+    if (!button || button.disabled) return;
+    const row = button.closest('.headers-row');
+    if (!row || row.dataset.rowType !== 'custom') return;
+    row.remove();
+    if (!headersRowsContainer.querySelector('.headers-row[data-row-type="custom"]')) {
+      addHeaderRow();
+    }
+  });
+  headersRowsContainer.addEventListener('input', () => {
+    if (headersErrorEl && headersErrorEl.textContent) headersErrorEl.textContent = '';
+  });
+}
+if (uaInput) {
+  uaInput.addEventListener('input', () => {
+    updateHeadersButtonLabel();
+    if (headersErrorEl && headersErrorEl.textContent) headersErrorEl.textContent = '';
+  });
+}
+
+function loadStoredHeaders() {
+  if (typeof localStorage === 'undefined') {
+    setCustomHeaders([], { persist: false, silent: true });
+    return;
+  }
+  let stored = null;
+  try {
+    stored = localStorage.getItem(HEADERS_STORAGE_KEY);
+  } catch {
+    stored = null;
+  }
+  if (!stored) {
+    setCustomHeaders([], { persist: false, silent: true });
+    return;
+  }
+
+  let entries = [];
+  let parsed = false;
+  if (typeof stored === 'string' && stored.trim()) {
+    try {
+      const maybeArray = JSON.parse(stored);
+      if (Array.isArray(maybeArray)) {
+        entries = maybeArray
+          .map((entry) => ({
+            name: typeof entry?.name === 'string' ? entry.name.trim() : '',
+            value: typeof entry?.value === 'string' ? entry.value : '',
+          }))
+          .filter((entry) => entry.name && !RESERVED_HEADER_NAMES.has(entry.name.toLowerCase()));
+        parsed = true;
+      }
+    } catch {
+      parsed = false;
+    }
+    if (!parsed) {
+      const legacy = parseLegacyHeaderString(stored);
+      entries = legacy.entries;
+    }
+  }
+  setCustomHeaders(entries, { persist: false, silent: true });
+}
+
+function setCustomHeaders(entries, options = {}) {
+  const { persist = true, silent = false } = options;
+  const normalizedEntries = Array.isArray(entries)
+    ? entries
+        .map((entry) => ({
+          name: typeof entry?.name === 'string' ? entry.name.trim() : '',
+          value: typeof entry?.value === 'string' ? entry.value : '',
+        }))
+        .filter((entry) => entry.name && !RESERVED_HEADER_NAMES.has(entry.name.toLowerCase()))
+    : [];
+  customHeaderEntries = normalizedEntries;
+  updateHeadersButtonLabel();
+  if (persist) {
+    try {
+      if (normalizedEntries.length) {
+        localStorage.setItem(HEADERS_STORAGE_KEY, JSON.stringify(normalizedEntries));
+      } else {
+        localStorage.removeItem(HEADERS_STORAGE_KEY);
+      }
+    } catch (err) {
+      console.warn('Failed to persist custom headers', err);
+    }
+  }
+  if (isHeadersPanelOpen) {
+    renderHeadersRows();
+  }
+  if (!silent && lastResponseMeta) {
+    renderMeta(lastResponseMeta);
+  }
+}
+
+function updateHeadersButtonLabel() {
+  if (!headersBtn) return;
+  headersBtn.textContent = 'Custom Headers';
+  const count = Array.isArray(customHeaderEntries) ? customHeaderEntries.length : 0;
+  const uaValue = uaInput && uaInput.value ? uaInput.value.trim() : '';
+  const hasUA = Boolean(uaValue);
+  const headerNames = count ? customHeaderEntries.map((entry) => entry.name).join(', ') : '';
+  const uaLabel = hasUA ? `User-Agent: ${uaValue}` : '';
+  const tooltipParts = [];
+  if (headerNames) tooltipParts.push(`Additional headers (${count}): ${headerNames}`);
+  if (uaLabel) tooltipParts.push(uaLabel);
+  headersBtn.title = tooltipParts.length ? tooltipParts.join('\n') : 'Configure custom headers';
+}
+
+function renderHeadersRows() {
+  if (!headersRowsContainer) return;
+  const existingCustomRows = headersRowsContainer.querySelectorAll('.headers-row[data-row-type="custom"]');
+  existingCustomRows.forEach((row) => row.remove());
+  const entries = Array.isArray(customHeaderEntries) ? customHeaderEntries : [];
+  entries.forEach((entry) => addHeaderRow(entry));
+  if (!headersRowsContainer.querySelector('.headers-row[data-row-type="custom"]')) {
+    addHeaderRow();
+  }
+}
+
+function createHeaderRow(entry = { name: '', value: '' }) {
+  const row = document.createElement('tr');
+  row.className = 'headers-row';
+  row.dataset.rowType = 'custom';
+
+  const nameCell = document.createElement('td');
+  const nameInput = document.createElement('input');
+  nameInput.className = 'headers-table__input headers-name';
+  nameInput.type = 'text';
+  nameInput.placeholder = 'X-Custom-Header';
+  nameInput.value = entry.name || '';
+  nameInput.setAttribute('aria-label', 'Header name');
+  nameCell.appendChild(nameInput);
+
+  const valueCell = document.createElement('td');
+  const valueInput = document.createElement('input');
+  valueInput.className = 'headers-table__input headers-value';
+  valueInput.type = 'text';
+  valueInput.placeholder = 'value';
+  valueInput.value = entry.value || '';
+  valueInput.setAttribute('aria-label', 'Header value');
+  valueCell.appendChild(valueInput);
+
+  const actionsCell = document.createElement('td');
+  actionsCell.className = 'headers-table__actions';
+  const removeBtn = document.createElement('button');
+  removeBtn.type = 'button';
+  removeBtn.className = 'headers-remove';
+  removeBtn.setAttribute('aria-label', 'Remove header');
+  removeBtn.textContent = '✕';
+  actionsCell.appendChild(removeBtn);
+
+  row.appendChild(nameCell);
+  row.appendChild(valueCell);
+  row.appendChild(actionsCell);
+
+  return row;
+}
+
+function addHeaderRow(entry = { name: '', value: '' }) {
+  if (!headersRowsContainer) return null;
+  const row = createHeaderRow(entry);
+  headersRowsContainer.appendChild(row);
+  return row;
+}
+
+function focusFirstHeaderInput() {
+  if (!headersRowsContainer) return;
+  const firstCustom = headersRowsContainer.querySelector('.headers-row[data-row-type="custom"] .headers-name');
+  if (firstCustom) firstCustom.focus();
+  else if (uaInput) uaInput.focus();
+}
+
+function parseLegacyHeaderString(raw) {
+  const entries = [];
+  const errors = [];
+  const text = typeof raw === 'string' ? raw : '';
+  if (!text.trim()) return { entries, errors };
+  const lines = text.split(/\r?\n/);
+  lines.forEach((line, idx) => {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) return;
+    const sepIndex = trimmed.indexOf(':');
+    if (sepIndex === -1) {
+      errors.push(`Line ${idx + 1}: missing ":" separator.`);
+      return;
+    }
+    const name = trimmed.slice(0, sepIndex).trim();
+    const value = trimmed.slice(sepIndex + 1).trim();
+    if (!name) {
+      errors.push(`Line ${idx + 1}: header name is required.`);
+      return;
+    }
+    const lower = name.toLowerCase();
+    if (!HEADER_NAME_PATTERN.test(name)) {
+      errors.push(`Line ${idx + 1}: "${name}" is not a valid header name.`);
+      return;
+    }
+    if (RESERVED_HEADER_NAMES.has(lower)) {
+      errors.push(`Line ${idx + 1}: "${name}" is managed separately.`);
+      return;
+    }
+    entries.push({ name, value });
+  });
+  return { entries, errors };
+}
+
+function openHeadersPanel() {
+  if (!headersPanel) return;
+  headersPanel.hidden = false;
+  headersPanel.setAttribute('data-open', '1');
+  isHeadersPanelOpen = true;
+  if (uaInput && !uaInput.value) {
+    uaInput.value = navigator.userAgent || '';
+  }
+  renderHeadersRows();
+  if (headersErrorEl) headersErrorEl.textContent = '';
+  requestAnimationFrame(() => {
+    focusFirstHeaderInput();
+  });
+  document.addEventListener('keydown', onHeadersPanelKeydown);
+}
+
+function closeHeadersPanel() {
+  if (!headersPanel) return;
+  headersPanel.hidden = true;
+  headersPanel.removeAttribute('data-open');
+  isHeadersPanelOpen = false;
+  document.removeEventListener('keydown', onHeadersPanelKeydown);
+  if (headersErrorEl) headersErrorEl.textContent = '';
+  if (headersBtn) headersBtn.focus();
+}
+
+function onHeadersPanelKeydown(event) {
+  if (!isHeadersPanelOpen) return;
+  if (event.key === 'Escape') {
+    event.preventDefault();
+    closeHeadersPanel();
+  } else if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+    event.preventDefault();
+    handleHeadersSave();
+  }
+}
+
+function handleHeadersSave() {
+  const { entries, errors } = collectHeaderEntriesFromUI();
+  if (errors.length) {
+    if (headersErrorEl) headersErrorEl.textContent = errors[0];
+    return;
+  }
+  if (headersErrorEl) headersErrorEl.textContent = '';
+  setCustomHeaders(entries);
+  let uaValue = uaInput && uaInput.value ? uaInput.value.trim() : '';
+  if (!uaValue) {
+    uaValue = navigator.userAgent || '';
+    if (uaInput) uaInput.value = uaValue;
+  }
+  try {
+    chrome.storage.sync.set({ customUA: uaValue });
+  } catch (err) {
+    console.warn('Failed to persist custom UA', err);
+  }
+  updateHeadersButtonLabel();
+  closeHeadersPanel();
+}
+
+function getActiveCustomHeaderEntries() {
+  if (!Array.isArray(customHeaderEntries)) return [];
+  return customHeaderEntries.filter((entry) => entry && entry.name);
+}
+
+function collectHeaderEntriesFromUI() {
+  if (!headersRowsContainer) return { entries: [], errors: [] };
+  const entries = [];
+  const errors = [];
+  const rows = Array.from(headersRowsContainer.querySelectorAll('.headers-row[data-row-type="custom"]'));
+  rows.forEach((row, index) => {
+    const nameInput = row.querySelector('.headers-name');
+    const valueInput = row.querySelector('.headers-value');
+    const name = nameInput ? nameInput.value.trim() : '';
+    const value = valueInput ? valueInput.value : '';
+    if (!name && !value.trim()) {
+      return;
+    }
+    if (!name) {
+      errors.push(`Header #${index + 1}: name is required.`);
+      return;
+    }
+    if (!HEADER_NAME_PATTERN.test(name)) {
+      errors.push(`Header #${index + 1}: "${name}" is not a valid header name.`);
+      return;
+    }
+    if (RESERVED_HEADER_NAMES.has(name.toLowerCase())) {
+      errors.push(`Header #${index + 1}: "${name}" is managed separately.`);
+      return;
+    }
+    entries.push({ name, value });
+  });
+  return { entries, errors };
+}
 
 async function fetchTextWithOptionalUA(url) {
   const ua = uaInput ? uaInput.value.trim() : '';
@@ -218,7 +570,7 @@ const dashState = {
   baseSelect: null,
   list: null,
   data: null,
-  selectedBase: 'auto',
+  selectedBase: null,
   mediaHandlers: [],
   unsupported: [],
 };
@@ -226,8 +578,8 @@ const dashState = {
 function cleanupDashDecorations() {
   removeMediaTemplateHandlers();
   dashState.data = null;
-  dashState.selectedBase = 'auto';
-  if (dashState.baseSelect) dashState.baseSelect.value = 'auto';
+  dashState.selectedBase = null;
+  if (dashState.baseSelect) dashState.baseSelect.value = '';
   if (dashState.list) dashState.list.innerHTML = '';
   if (dashState.summary) dashState.summary.textContent = 'Segments';
   if (dashState.panel) dashState.panel.open = false;
@@ -326,13 +678,8 @@ function ensureDashInspector() {
 function populateDashBaseOptions(baseOptions) {
   if (!dashState.baseSelect) return;
   const select = dashState.baseSelect;
-  const prev = dashState.selectedBase || 'auto';
+  const prev = dashState.selectedBase;
   select.innerHTML = '';
-
-  const autoOption = document.createElement('option');
-  autoOption.value = 'auto';
-  autoOption.textContent = 'Auto (manifest)';
-  select.appendChild(autoOption);
 
   baseOptions.forEach((opt) => {
     const option = document.createElement('option');
@@ -341,13 +688,13 @@ function populateDashBaseOptions(baseOptions) {
     select.appendChild(option);
   });
 
-  if (prev && (prev === 'auto' || baseOptions.some((opt) => opt.value === prev))) {
-    select.value = prev;
-    dashState.selectedBase = prev;
-  } else {
-    select.value = 'auto';
-    dashState.selectedBase = 'auto';
+  let next = prev;
+  if (!next || !baseOptions.some((opt) => opt.value === next)) {
+    next = baseOptions.length ? baseOptions[0].value : '';
   }
+  dashState.selectedBase = next || null;
+  if (next) select.value = next;
+  else select.value = '';
 
   if (dashState.toolbar) {
     dashState.toolbar.style.display = baseOptions.length ? 'flex' : 'none';
@@ -589,7 +936,7 @@ function findNextAttrValueSpan(attrNameSpan) {
 }
 
 function computeContextBase(ctx, data, selectedBase) {
-  let base = selectedBase === 'auto' ? ctx.autoBase : selectedBase;
+  let base = selectedBase || ctx.autoBase;
   if (!base) base = data.manifestBase;
   ctx.baseParts.forEach((part) => {
     base = resolveAgainstBase(base, part);
@@ -1156,7 +1503,25 @@ async function fetchWithOptionalUA(url, ua) {
     console.warn('Failed to clear resource timings', err);
   }
   const t0 = performance.now();
-  const r = await fetch(url, { credentials: 'omit', cache: 'no-store' });
+  const fetchOptions = {
+    credentials: 'omit',
+    cache: 'no-store',
+  };
+  const activeHeaders = getActiveCustomHeaderEntries();
+  if (activeHeaders.length) {
+    if (typeof Headers !== 'undefined') {
+      const headers = new Headers();
+      activeHeaders.forEach((entry) => headers.append(entry.name, entry.value));
+      fetchOptions.headers = headers;
+    } else {
+      const headers = {};
+      activeHeaders.forEach((entry) => {
+        headers[entry.name] = entry.value;
+      });
+      fetchOptions.headers = headers;
+    }
+  }
+  const r = await fetch(url, fetchOptions);
   const t1 = performance.now();
   const ct = r.headers.get('content-type') || '';
   const bufferPromise = r.arrayBuffer();
@@ -1249,6 +1614,12 @@ function renderMeta({ status, contentType, bytes, mode, durationMs }) {
   add('Size', `${bytes.toLocaleString()} bytes`);
   const finiteResponse = Number.isFinite(durationMs) ? durationMs : null;
   if (finiteResponse !== null) add('Response time', `${formatDuration(finiteResponse)}`);
+  if (customHeaderEntries.length) {
+    const formatted = customHeaderEntries
+      .map(({ name, value }) => `<code>${escapeHTML(name)}: ${escapeHTML(value)}</code>`)
+      .join('<br />');
+    add('Request Headers', formatted);
+  }
   // Total time and Processing time intentionally omitted to declutter meta panel
 }
 
