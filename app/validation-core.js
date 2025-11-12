@@ -102,7 +102,6 @@
 
     let pendingDirective = null;
     let mediaSegments = 0;
-    let versionSeen = false;
     const variantEntries = [];
     const mediaPlaylistUris = [];
     let encounteredStreamInf = 0;
@@ -202,7 +201,6 @@
 
           if (attrs && attrs.URI) mediaPlaylistUris.push({ uri: attrs.URI, line: lineNumber });
         } else if (line.startsWith('#EXT-X-VERSION')) {
-          versionSeen = true;
           const value = line.split(':')[1];
           const parsed = Number.parseInt((value || '').trim(), 10);
           if (Number.isInteger(parsed) && parsed >= 1) {
@@ -248,28 +246,29 @@
       });
     }
     
-    // --- HLS Version Validation Final Check (FIXED) ---
-    if (minRequiredVersion > declaredVersion) {
+    // Defer version diagnostics until after primary info messages to maintain expected order
+    const appendVersionDiagnostics = () => {
+      if (minRequiredVersion > declaredVersion) {
         const uniqueFeatures = [...new Set(versionNotes.filter(n => n.version === minRequiredVersion).map(n => n.feature))];
         const featureList = uniqueFeatures.join(', ');
-            
         result.errors.push({
-            message: `Manifest declares #EXT-X-VERSION:${declaredVersion}, but requires at least version ${minRequiredVersion} to support the tags/attributes: ${featureList}.`,
-            line: null,
+          message: `Manifest declares #EXT-X-VERSION:${declaredVersion}, but requires at least version ${minRequiredVersion} to support the tags/attributes: ${featureList}.`,
+          line: null,
         });
-    } else if (declaredVersion > 1) {
-         result.info.push({
-            message: `Manifest declares #EXT-X-VERSION:${declaredVersion}. Minimal required version based on tags used is ${minRequiredVersion}.`,
-            line: null,
-        });
-    } else {
-        // This is the message for when #EXT-X-VERSION is completely missing
+        return;
+      }
+      if (declaredVersion > 1) {
         result.info.push({
-            message: `Manifest does not explicitly declare #EXT-X-VERSION. Assumed version is ${declaredVersion}. Minimal required version based on tags used is ${minRequiredVersion}.`,
-            line: null,
+          message: `Manifest declares #EXT-X-VERSION:${declaredVersion}. Minimal required version based on tags used is ${minRequiredVersion}.`,
+          line: null,
         });
-    }
-    // -----------------------------------------------------
+      } else {
+        result.info.push({
+          message: `Manifest does not explicitly declare #EXT-X-VERSION. Assumed version is ${declaredVersion}. Minimal required version based on tags used is ${minRequiredVersion}.`,
+          line: null,
+        });
+      }
+    };
 
     const hasEndlist = lines.some((line) => line.trim().toUpperCase() === '#EXT-X-ENDLIST');
 
@@ -294,6 +293,8 @@
         message: `Media segments: ${mediaSegments}`,
         line: null,
       });
+      // Ensure version notes come after primary media info
+      appendVersionDiagnostics();
       return result;
     }
 
@@ -314,6 +315,8 @@
         message: 'Child playlists were not validated (no fetcher provided).',
         line: null,
       });
+      // Append version diagnostics before returning
+      appendVersionDiagnostics();
       return result;
     }
 
