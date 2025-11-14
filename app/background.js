@@ -7,26 +7,58 @@
 // -------------------------------
 // State & storage helpers
 // -------------------------------
-const state = { customUA: "" };
+const state = { customUA: "", uaEnabled: true };
 
-chrome.storage.sync.get({ customUA: "" }, (res) => {
+chrome.storage.sync.get({ customUA: "", uaEnabled: true }, (res) => {
   state.customUA = res.customUA || "";
+  state.uaEnabled = typeof res.uaEnabled === "boolean" ? res.uaEnabled : true;
 });
 
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === "sync" && changes.customUA) {
+  if (area !== "sync") return;
+  if (changes.customUA) {
     state.customUA = changes.customUA.newValue || "";
+  }
+  if (changes.uaEnabled) {
+    state.uaEnabled = typeof changes.uaEnabled.newValue === "boolean" ? changes.uaEnabled.newValue : true;
   }
 });
 
-// One-time migration: default autoOpenViewer = true
+ // One-time migration: default autoOpenViewer = true
 chrome.runtime.onInstalled.addListener(() => {
   chrome.storage.sync.get(null, (res) => {
+    const updates = {};
     if (!Object.prototype.hasOwnProperty.call(res, "autoOpenViewer")) {
-      chrome.storage.sync.set({ autoOpenViewer: true });
+      updates.autoOpenViewer = true;
+    }
+    if (!Object.prototype.hasOwnProperty.call(res, "uaEnabled")) {
+      updates.uaEnabled = true;
+    }
+    if (Object.keys(updates).length) {
+      chrome.storage.sync.set(updates);
     }
   });
 });
+
+// Defensive cleanup on browser startup: remove any lingering dynamic rules
+if (
+  chrome &&
+  chrome.runtime &&
+  chrome.runtime.onStartup &&
+  typeof chrome.runtime.onStartup.addListener === "function"
+) {
+  chrome.runtime.onStartup.addListener(async () => {
+    try {
+      const existing = await getDynamicRules();
+      if (existing && existing.length) {
+        const ids = existing.map((r) => r.id);
+        await chrome.declarativeNetRequest.updateDynamicRules({ removeRuleIds: ids });
+      }
+    } catch {
+      // ignore
+    }
+  });
+}
 
 // Promise helper
 function getSync(defaults) {
@@ -52,10 +84,63 @@ function buildExactUrlRule(url, ua, id) {
   };
 }
 
+// Promisified helper for reading existing dynamic rules
+function getDynamicRules() {
+  return new Promise((resolve) => {
+    try {
+      const api =
+        chrome &&
+        chrome.declarativeNetRequest &&
+        chrome.declarativeNetRequest.getDynamicRules;
+      if (typeof api === "function") {
+        api(resolve);
+      } else {
+        resolve([]);
+      }
+    } catch {
+      resolve([]);
+    }
+  });
+}
+
+// Generate a unique 31-bit positive rule id that doesn't collide with existing ids
+function generateUniqueRuleId(existingIds) {
+  const used = new Set(existingIds || []);
+  for (let i = 0; i < 8; i += 1) {
+    const buf = new Uint32Array(1);
+    try {
+      const g = typeof globalThis !== "undefined" ? globalThis : {};
+      if (g.crypto && typeof g.crypto.getRandomValues === "function") {
+        g.crypto.getRandomValues(buf);
+      } else {
+        buf[0] = Math.floor(Math.random() * 0x7fffffff);
+      }
+    } catch {
+      buf[0] = Math.floor(Math.random() * 0x7fffffff);
+    }
+    const candidate = buf[0] & 0x7fffffff; // 31-bit positive
+    if (candidate > 0 && !used.has(candidate)) return candidate;
+  }
+  // Fallback to linear search if random attempts somehow collide repeatedly
+  let fallback = 1;
+  while (used.has(fallback)) fallback += 1;
+  return fallback;
+}
+
 async function applyUARuleForUrl(url, ua) {
-  const ruleId = Math.floor(Date.now() % 2147483647);
+  // Clear any stale dynamic rules first to prevent ID collisions and lingering overrides
+  const existing = await getDynamicRules();
+  if (existing && existing.length) {
+    const ids = existing.map((r) => r.id);
+    await chrome.declarativeNetRequest.updateDynamicRules({ removeRuleIds: ids });
+  }
+
+  const existingIds = existing ? existing.map((r) => r.id) : [];
+  const ruleId = generateUniqueRuleId(existingIds);
   const rule = buildExactUrlRule(url, ua, ruleId);
   await chrome.declarativeNetRequest.updateDynamicRules({ addRules: [rule] });
+
+  // Best-effort cleanup (service worker may be suspended before this fires; that's OK since we clear on next add).
   setTimeout(() => {
     chrome.declarativeNetRequest.updateDynamicRules({ removeRuleIds: [ruleId] });
   }, 5000);
@@ -63,6 +148,10 @@ async function applyUARuleForUrl(url, ua) {
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg?.type === "APPLY_UA_RULE" && typeof msg.url === "string") {
+    if (state.uaEnabled === false) {
+      sendResponse({ ok: false, error: "User-Agent override disabled" });
+      return true;
+    }
     const ua = (msg.ua && msg.ua.trim()) || state.customUA || "";
     if (!ua) {
       sendResponse({ ok: false, error: "No User-Agent set" });

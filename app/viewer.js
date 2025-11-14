@@ -11,6 +11,7 @@ const validateBtn = $('validateManifest');
 const codeEl = $('code');
 const metaEl = $('meta');
 const toggleThemeBtn = $('toggleTheme');
+const openCompatBtn = $('openCompat');
 const headersBtn = $('editHeaders');
 const headersPanel = $('headersPanel');
 const headersSaveBtn = $('headersSave');
@@ -20,6 +21,8 @@ const headersCloseBtn = $('headersClose');
 const headersErrorEl = $('headersError');
 const headersRowsContainer = $('headersRows');
 const headersAddBtn = $('headersAdd');
+const uaResetBtn = $('uaReset');
+const uaEnabledInput = $('uaEnabled');
 const entityDecoder = document.createElement('textarea');
 let lastLoadedUrl = '';
 let lastLoadedText = '';
@@ -76,6 +79,16 @@ toggleThemeBtn.addEventListener('click', () => {
 loadStoredHeaders();
 updateHeadersButtonLabel();
 
+// Load User-Agent enabled state from storage (default: true)
+try {
+  chrome.storage.sync.get({ uaEnabled: true }, (res) => {
+    if (uaEnabledInput) uaEnabledInput.checked = !!res.uaEnabled;
+    updateHeadersButtonLabel();
+  });
+} catch {
+  // ignore
+}
+
 if (headersBtn) headersBtn.addEventListener('click', openHeadersPanel);
 if (headersSaveBtn) headersSaveBtn.addEventListener('click', handleHeadersSave);
 if (headersCancelBtn) headersCancelBtn.addEventListener('click', () => {
@@ -127,6 +140,36 @@ if (uaInput) {
   });
 }
 
+// Reset UA to the browser default for this session only (do not clear persisted custom UA)
+if (uaResetBtn) {
+  uaResetBtn.addEventListener('click', () => {
+    if (uaInput) uaInput.value = navigator.userAgent || '';
+    updateHeadersButtonLabel();
+    if (headersErrorEl && headersErrorEl.textContent) headersErrorEl.textContent = '';
+  });
+}
+
+// Persist UA enable/disable toggle
+if (uaEnabledInput) {
+  uaEnabledInput.addEventListener('change', () => {
+    const enabled = !!uaEnabledInput.checked;
+    try {
+      chrome.storage.sync.set({ uaEnabled: enabled });
+    } catch {
+      // ignore
+    }
+    updateHeadersButtonLabel();
+  });
+}
+
+// Auto-open headers panel if requested via query param (?headers=1)
+const shouldOpenHeaders = params.get('headers') === '1';
+if (shouldOpenHeaders) {
+  requestAnimationFrame(() => {
+    openHeadersPanel();
+  });
+}
+
 function loadStoredHeaders() {
   if (typeof localStorage === 'undefined') {
     setCustomHeaders([], { persist: false, silent: true });
@@ -153,6 +196,7 @@ function loadStoredHeaders() {
           .map((entry) => ({
             name: typeof entry?.name === 'string' ? entry.name.trim() : '',
             value: typeof entry?.value === 'string' ? entry.value : '',
+            enabled: typeof entry?.enabled === 'boolean' ? entry.enabled : true,
           }))
           .filter((entry) => entry.name && !RESERVED_HEADER_NAMES.has(entry.name.toLowerCase()));
         parsed = true;
@@ -162,7 +206,7 @@ function loadStoredHeaders() {
     }
     if (!parsed) {
       const legacy = parseLegacyHeaderString(stored);
-      entries = legacy.entries;
+      entries = legacy.entries.map((e) => ({ ...e, enabled: true }));
     }
   }
   setCustomHeaders(entries, { persist: false, silent: true });
@@ -175,6 +219,7 @@ function setCustomHeaders(entries, options = {}) {
         .map((entry) => ({
           name: typeof entry?.name === 'string' ? entry.name.trim() : '',
           value: typeof entry?.value === 'string' ? entry.value : '',
+          enabled: typeof entry?.enabled === 'boolean' ? entry.enabled : true,
         }))
         .filter((entry) => entry.name && !RESERVED_HEADER_NAMES.has(entry.name.toLowerCase()))
     : [];
@@ -202,10 +247,14 @@ function setCustomHeaders(entries, options = {}) {
 function updateHeadersButtonLabel() {
   if (!headersBtn) return;
   headersBtn.textContent = 'Custom Headers';
-  const count = Array.isArray(customHeaderEntries) ? customHeaderEntries.length : 0;
+  const enabledEntries = Array.isArray(customHeaderEntries)
+    ? customHeaderEntries.filter((e) => e && e.name && e.enabled !== false)
+    : [];
+  const count = enabledEntries.length;
   const uaValue = uaInput && uaInput.value ? uaInput.value.trim() : '';
-  const hasUA = Boolean(uaValue);
-  const headerNames = count ? customHeaderEntries.map((entry) => entry.name).join(', ') : '';
+  const isUaEnabled = uaEnabledInput ? !!uaEnabledInput.checked : true;
+  const hasUA = isUaEnabled && Boolean(uaValue);
+  const headerNames = count ? enabledEntries.map((entry) => entry.name).join(', ') : '';
   const uaLabel = hasUA ? `User-Agent: ${uaValue}` : '';
   const tooltipParts = [];
   if (headerNames) tooltipParts.push(`Additional headers (${count}): ${headerNames}`);
@@ -224,11 +273,22 @@ function renderHeadersRows() {
   }
 }
 
-function createHeaderRow(entry = { name: '', value: '' }) {
+function createHeaderRow(entry = { name: '', value: '', enabled: true }) {
   const row = document.createElement('tr');
   row.className = 'headers-row';
   row.dataset.rowType = 'custom';
 
+  // Enabled checkbox cell
+  const enabledCell = document.createElement('td');
+  enabledCell.className = 'headers-enabled-cell';
+  const enabledInput = document.createElement('input');
+  enabledInput.type = 'checkbox';
+  enabledInput.className = 'headers-enabled';
+  enabledInput.checked = entry.enabled !== false;
+  enabledInput.setAttribute('aria-label', 'Enable header');
+  enabledCell.appendChild(enabledInput);
+
+  // Header name cell
   const nameCell = document.createElement('td');
   const nameInput = document.createElement('input');
   nameInput.className = 'headers-table__input headers-name';
@@ -238,6 +298,7 @@ function createHeaderRow(entry = { name: '', value: '' }) {
   nameInput.setAttribute('aria-label', 'Header name');
   nameCell.appendChild(nameInput);
 
+  // Header value cell
   const valueCell = document.createElement('td');
   const valueInput = document.createElement('input');
   valueInput.className = 'headers-table__input headers-value';
@@ -247,6 +308,7 @@ function createHeaderRow(entry = { name: '', value: '' }) {
   valueInput.setAttribute('aria-label', 'Header value');
   valueCell.appendChild(valueInput);
 
+  // Actions cell
   const actionsCell = document.createElement('td');
   actionsCell.className = 'headers-table__actions';
   const removeBtn = document.createElement('button');
@@ -256,6 +318,7 @@ function createHeaderRow(entry = { name: '', value: '' }) {
   removeBtn.textContent = '✕';
   actionsCell.appendChild(removeBtn);
 
+  row.appendChild(enabledCell);
   row.appendChild(nameCell);
   row.appendChild(valueCell);
   row.appendChild(actionsCell);
@@ -362,7 +425,8 @@ function handleHeadersSave() {
     if (uaInput) uaInput.value = uaValue;
   }
   try {
-    chrome.storage.sync.set({ customUA: uaValue });
+    const enabled = uaEnabledInput ? !!uaEnabledInput.checked : true;
+    chrome.storage.sync.set({ customUA: uaValue, uaEnabled: enabled });
   } catch (err) {
     console.warn('Failed to persist custom UA', err);
   }
@@ -372,7 +436,7 @@ function handleHeadersSave() {
 
 function getActiveCustomHeaderEntries() {
   if (!Array.isArray(customHeaderEntries)) return [];
-  return customHeaderEntries.filter((entry) => entry && entry.name);
+  return customHeaderEntries.filter((entry) => entry && entry.name && entry.enabled !== false);
 }
 
 function collectHeaderEntriesFromUI() {
@@ -381,8 +445,10 @@ function collectHeaderEntriesFromUI() {
   const errors = [];
   const rows = Array.from(headersRowsContainer.querySelectorAll('.headers-row[data-row-type="custom"]'));
   rows.forEach((row, index) => {
+    const enabledInput = row.querySelector('.headers-enabled');
     const nameInput = row.querySelector('.headers-name');
     const valueInput = row.querySelector('.headers-value');
+    const enabled = enabledInput ? !!enabledInput.checked : true;
     const name = nameInput ? nameInput.value.trim() : '';
     const value = valueInput ? valueInput.value : '';
     if (!name && !value.trim()) {
@@ -400,7 +466,7 @@ function collectHeaderEntriesFromUI() {
       errors.push(`Header #${index + 1}: "${name}" is managed separately.`);
       return;
     }
-    entries.push({ name, value });
+    entries.push({ name, value, enabled });
   });
   return { entries, errors };
 }
@@ -1491,7 +1557,15 @@ function highlightJSON(text) {
 
 
 async function fetchWithOptionalUA(url, ua) {
-  if (ua && ua.trim()) {
+  let uaEnabled = true;
+  try {
+    uaEnabled = await new Promise((resolve) => {
+      chrome.storage.sync.get({ uaEnabled: true }, (res) => resolve(!!res.uaEnabled));
+    });
+  } catch {
+    // ignore
+  }
+  if (uaEnabled && ua && ua.trim()) {
     const res = await chrome.runtime.sendMessage({ type: 'APPLY_UA_RULE', url, ua });
     if (!res || !res.ok) {
       console.warn('UA rule not applied:', res && res.error);
@@ -2154,6 +2228,57 @@ if (backBtn) {
     updateBackButton();
   });
   updateBackButton();
+}
+
+if (openCompatBtn) {
+  openCompatBtn.addEventListener('click', () => {
+    try {
+      if (hasLoadedManifest && lastLoadedUrl) {
+        const modeForReturn = (lastLoadedMode === 'validation' && currentValidationView && currentValidationView.sourceMode)
+          ? currentValidationView.sourceMode
+          : lastLoadedMode;
+        const state = { url: lastLoadedUrl, mode: modeForReturn };
+        sessionStorage.setItem('mv_return_state', JSON.stringify(state));
+
+        // Persist viewer navigation history (filter out binary snapshots to keep storage small)
+        const nav = Array.isArray(navigationStack)
+          ? navigationStack
+              .filter((s) => s && s.mode !== 'mp4' && s.mode !== 'segments')
+              .map((s) => ({
+                url: s.url || '',
+                text: s.text || '',
+                mode: s.mode || 'auto',
+                contentType: s.contentType || '',
+                meta: s.meta ? { ...s.meta } : null,
+                selectedMode: s.selectedMode || 'auto',
+                validation: s.validation
+                  ? {
+                      sourceMode: s.validation.sourceMode || '',
+                      url: s.validation.url || '',
+                      result: {
+                        errors: Array.isArray(s.validation.result?.errors)
+                          ? s.validation.result.errors.map((e) => ({ ...e }))
+                          : [],
+                        warnings: Array.isArray(s.validation.result?.warnings)
+                          ? s.validation.result.warnings.map((e) => ({ ...e }))
+                          : [],
+                        info: Array.isArray(s.validation.result?.info)
+                          ? s.validation.result.info.map((e) => ({ ...e }))
+                          : [],
+                      },
+                    }
+                  : null,
+              }))
+          : [];
+        sessionStorage.setItem('mv_return_nav', JSON.stringify(nav));
+      } else {
+        sessionStorage.removeItem('mv_return_state');
+        sessionStorage.removeItem('mv_return_nav');
+      }
+    } catch {}
+    const page = chrome.runtime && chrome.runtime.getURL ? chrome.runtime.getURL('compat.html') : 'compat.html';
+    try { window.location.href = page; } catch { window.open(page, '_self'); }
+  });
 }
 
 function maybeHandleManifestLinkClick(event) {
@@ -3226,21 +3351,78 @@ function formatDetailDisplay(value) {
   return String(value);
 }
 
+// Attempt to restore previous viewer state when returning from Compatibility page
+(function restoreFromCompat() {
+  try {
+    const raw = sessionStorage.getItem('mv_return_state');
+    if (raw) {
+      const data = JSON.parse(raw);
+      if (data && data.url) {
+        urlInput.value = data.url;
+        if (data.mode && typeof data.mode === 'string') {
+          modeSelect.value = data.mode;
+        }
+      }
+      sessionStorage.removeItem('mv_return_state');
+    }
+
+    // Restore viewer navigation history if available
+    const navRaw = sessionStorage.getItem('mv_return_nav');
+    if (navRaw) {
+      const list = JSON.parse(navRaw);
+      if (Array.isArray(list)) {
+        navigationStack.length = 0; // mutate in place; navigationStack is const reference
+        list.forEach((snap) => {
+          navigationStack.push({
+            url: snap.url || '',
+            text: snap.text || '',
+            buffer: null, // buffers are not persisted; binary snapshots are filtered out
+            mode: snap.mode || 'auto',
+            contentType: snap.contentType || '',
+            meta: snap.meta || null,
+            selectedMode: snap.selectedMode || 'auto',
+            validation: snap.validation
+              ? {
+                  sourceMode: snap.validation.sourceMode || '',
+                  url: snap.validation.url || '',
+                  result: {
+                    errors: Array.isArray(snap.validation.result?.errors)
+                      ? snap.validation.result.errors.map((e) => ({ ...e }))
+                      : [],
+                    warnings: Array.isArray(snap.validation.result?.warnings)
+                      ? snap.validation.result.warnings.map((e) => ({ ...e }))
+                      : [],
+                    info: Array.isArray(snap.validation.result?.info)
+                      ? snap.validation.result.info.map((e) => ({ ...e }))
+                      : [],
+                  },
+                }
+              : null,
+          });
+        });
+        updateBackButton();
+      }
+      sessionStorage.removeItem('mv_return_nav');
+    }
+  } catch {}
+})();
+
 // Auto-load if URL provided
 if (urlInput.value) load();
 
 
 (function loadVersion() {
   const versionEl = document.getElementById('viewer-version');
-  if (versionEl) {
-    try {
-      // Get the version from the manifest
+  if (!versionEl) return;
+  try {
+    if (typeof chrome !== 'undefined' && chrome.runtime && typeof chrome.runtime.getManifest === 'function') {
       const manifest = chrome.runtime.getManifest();
       versionEl.textContent = manifest.version || '...';
-    } catch (e) {
-      console.error("Failed to load manifest version", e);
+    } else {
       versionEl.textContent = 'N/A';
     }
+  } catch {
+    versionEl.textContent = 'N/A';
   }
 })();
 

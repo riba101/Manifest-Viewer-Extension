@@ -55,7 +55,9 @@ body {
 }
 
 .topbar .left {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 8px;
   min-width: 0;
 }
 
@@ -70,21 +72,21 @@ body {
 }
 
 @media (min-width: 1280px) {
+  /* Force single-column layout at all widths so URL stays full-width and controls drop below */
   .topbar {
-    grid-template-columns: 1fr auto;
-    column-gap: 8px;
-    row-gap: 8px;
+    grid-template-columns: 1fr;
+    row-gap: 10px;
   }
 
   .topbar .left {
-    display: grid;
-    grid-template-columns: 1fr auto;
+    display: flex;
+    align-items: center;
     gap: 8px;
   }
 
   .topbar .right {
-    justify-content: flex-end;
-    width: auto;
+    justify-content: flex-start;
+    width: 100%;
   }
 }
 
@@ -111,6 +113,7 @@ body {
   width: 100%;
   min-width: 0;
   text-overflow: ellipsis;
+  flex: 1 1 auto;
 }
 
 .topbar select#mode {
@@ -792,7 +795,7 @@ a[data-hls-uri]:hover {
 }
 
 .headers-panel__dialog {
-  width: min(560px, 100%);
+  width: min(720px, 100%);
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 12px;
@@ -901,14 +904,27 @@ a[data-hls-uri]:hover {
   border-bottom: none;
 }
 
-.headers-table__actions-col {
+.headers-table__enabled-col {
   width: 48px;
+  text-align: center;
+}
+.headers-table__actions-col {
+  width: 64px;
   text-align: center;
 }
 
 .headers-table__actions {
   text-align: center;
   padding: 4px;
+}
+
+.headers-enabled-cell {
+  text-align: center;
+  vertical-align: middle;
+}
+.headers-enabled {
+  width: 16px;
+  height: 16px;
 }
 
 .headers-table__input {
@@ -946,8 +962,28 @@ a[data-hls-uri]:hover {
   justify-content: center;
 }
 
+/* UA reset icon: icon-only button, no box/border (same sizing/feel as the remove icon) */
+.headers-reset {
+  width: 32px;
+  height: 32px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 16px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
 .headers-remove:hover {
   color: var(--error);
+}
+
+/* Subtle hover color for reset icon */
+.headers-reset:hover {
+  color: var(--acc1);
 }
 
 .headers-remove:disabled {
@@ -999,4 +1035,12 @@ a[data-hls-uri]:hover {
 
 html[data-theme="light"] .headers-panel {
   background: rgba(17, 24, 39, 0.4);
+}
+
+/* Theme-specific color for GitHub logo in footer */
+footer a[aria-label="GitHub repository"] {
+  color: #fff !important; /* default (dark mode) */
+}
+html[data-theme="light"] footer a[aria-label="GitHub repository"] {
+  color: #000 !important; /* light mode: black logo */
 }

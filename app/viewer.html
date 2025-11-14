@@ -10,22 +10,24 @@
     <header class="topbar">
       <div class="left">
         <input id="url" type="url" placeholder="https://…/manifest.mpd or .m3u8" />
-      </div>
-      <div class="right">
-        <select id="mode">
+        <select id="mode" title="Parsing mode">
           <option value="auto">Auto</option>
           <option value="dash">DASH (.mpd)</option>
           <option value="hls">HLS (.m3u8)</option>
           <option value="json">JSON</option>
           <option value="segments">Segments (MP4)</option>
         </select>
+      </div>
+      <div class="right">
+
+        <button id="back" title="Back to previous view">← Back</button>
         <button id="editHeaders" title="Configure custom headers">Custom Headers</button>
         <button id="refresh" title="Fetch / Refresh">↻ Refresh</button>
         <button id="copyManifestUrl" title="Copy manifest URL">⧉ Copy Manifest URL</button>
         <button id="copyManifest" title="Copy manifest text">⧉ Copy Manifest as text</button>
         <button id="downloadManifest" title="Download manifest text">⇣ Download Manifest</button>
         <button id="validateManifest" title="Validate manifest">✔ Validate</button>
-        <button id="back" title="Back to previous view">← Back</button>
+        <button id="openCompat" title="Open compatibility checker">Compatibility</button>
         <button id="toggleTheme" title="Toggle theme">☀️/🌙</button>
       </div>
     </header>
@@ -55,6 +57,7 @@
           <table class="headers-table" aria-describedby="headersPanelTitle">
             <thead>
               <tr>
+                <th scope="col" class="headers-table__enabled-col" aria-label="Enabled">Enabled</th>
                 <th scope="col">Header</th>
                 <th scope="col">Value</th>
                 <th scope="col" class="headers-table__actions-col" aria-label="Actions"></th>
@@ -62,6 +65,9 @@
             </thead>
             <tbody id="headersRows">
               <tr class="headers-row" data-row-type="ua">
+                <td class="headers-enabled-cell">
+                  <input id="uaEnabled" type="checkbox" checked aria-label="User-Agent enabled" />
+                </td>
                 <td>
                   <input
                     id="uaName"
@@ -83,13 +89,13 @@
                 </td>
                 <td class="headers-table__actions">
                   <button
-                    class="headers-remove"
+                    id="uaReset"
+                    class="headers-reset"
                     type="button"
-                    disabled
-                    title="User-Agent header is always included"
-                    aria-label="User-Agent header is required"
+                    title="Reset to browser default User-Agent"
+                    aria-label="Reset User-Agent to browser default"
                   >
-                    ✕
+                    ↺
                   </button>
                 </td>
               </tr>
