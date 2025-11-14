@@ -371,8 +371,13 @@
     }
   });
   if (backBtn) backBtn.addEventListener('click', () => {
-    const page = chrome.runtime && chrome.runtime.getURL ? chrome.runtime.getURL('viewer.html') : 'viewer.html';
-    try { window.location.href = page; } catch { window.open(page, '_self'); }
+    const isExt = typeof chrome !== 'undefined' && chrome.runtime && typeof chrome.runtime.getURL === 'function';
+    const page = isExt ? chrome.runtime.getURL('viewer.html') : (function(){ try { return new URL('viewer.html', window.location.href).href; } catch (e) { return 'viewer.html'; } })();
+    try {
+      window.location.href = page;
+    } catch (e) {
+      try { window.open(page, '_self'); } catch {}
+    }
   });
 
   // Custom tester
