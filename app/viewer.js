@@ -47,14 +47,28 @@ if (uaInput && !uaInput.value) uaInput.value = navigator.userAgent || '';
 
 // Load default UA if not present
 if (uaInput && !uaInput.value) {
-  chrome.runtime.sendMessage({ type: 'GET_UA' }, (res) => {
-    if (res && typeof res.ua === 'string' && res.ua.trim()) {
-      uaInput.value = res.ua;
-    } else if (!uaInput.value) {
+  try {
+    if (typeof chrome !== 'undefined' && chrome.runtime && typeof chrome.runtime.sendMessage === 'function') {
+      chrome.runtime.sendMessage({ type: 'GET_UA' }, (res) => {
+        if (res && typeof res.ua === 'string' && res.ua.trim()) {
+          uaInput.value = res.ua;
+        } else if (!uaInput.value) {
+          uaInput.value = navigator.userAgent || '';
+        }
+        updateHeadersButtonLabel();
+      });
+    } else {
+      if (!uaInput.value) {
+        uaInput.value = navigator.userAgent || '';
+      }
+      updateHeadersButtonLabel();
+    }
+  } catch {
+    if (!uaInput.value) {
       uaInput.value = navigator.userAgent || '';
     }
     updateHeadersButtonLabel();
-  });
+  }
 }
 
 function setTheme(theme) {
@@ -771,10 +785,11 @@ function renderDashInspector() {
   if (!dashState.panel || !dashState.list) return;
   const data = dashState.data;
   const unsupported = dashState.unsupported || [];
+  const contexts = (data && Array.isArray(data.contexts)) ? data.contexts : [];
   const totalReps =
     (data && Number.isFinite(data.totalRepresentations) ? data.totalRepresentations : 0) ||
-    contexts.length + unsupported.length;
-  const hasSegments = data && data.contexts && data.contexts.length;
+    (contexts.length + unsupported.length);
+  const hasSegments = contexts.length > 0;
   if (!data || !hasSegments) {
     dashState.list.innerHTML = '';
     if (dashState.summary) {
@@ -844,7 +859,7 @@ function renderDashInspector() {
     return;
   }
 
-  const contexts = data.contexts;
+  // contexts defined above for use throughout renderDashInspector
   dashState.list.innerHTML = '';
 
   const fragment = document.createDocumentFragment();
@@ -1566,9 +1581,15 @@ async function fetchWithOptionalUA(url, ua) {
     // ignore
   }
   if (uaEnabled && ua && ua.trim()) {
-    const res = await chrome.runtime.sendMessage({ type: 'APPLY_UA_RULE', url, ua });
-    if (!res || !res.ok) {
-      console.warn('UA rule not applied:', res && res.error);
+    try {
+      if (typeof chrome !== 'undefined' && chrome.runtime && typeof chrome.runtime.sendMessage === 'function') {
+        const res = await chrome.runtime.sendMessage({ type: 'APPLY_UA_RULE', url, ua });
+        if (!res || !res.ok) {
+          console.warn('UA rule not applied:', res && res.error);
+        }
+      }
+    } catch (err) {
+      // ignore in non-extension environments
     }
   }
   try {
@@ -2117,7 +2138,11 @@ async function load(options = {}) {
       validation: null,
     });
 
-    chrome.storage.sync.set({ customUA: ua });
+    try {
+      if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.sync && typeof chrome.storage.sync.set === 'function') {
+        chrome.storage.sync.set({ customUA: ua });
+      }
+    } catch {}
   } catch (e) {
     codeEl.textContent = 'Error: ' + (e && e.message ? e.message : String(e));
     hasLoadedManifest = false;
