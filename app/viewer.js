@@ -2276,8 +2276,9 @@ if (openCompatBtn) {
         sessionStorage.removeItem('mv_return_nav');
       }
     } catch {}
-    const page = chrome.runtime && chrome.runtime.getURL ? chrome.runtime.getURL('compat.html') : 'compat.html';
-    try { window.location.href = page; } catch { window.open(page, '_self'); }
+    const isExt = typeof chrome !== 'undefined' && chrome.runtime && typeof chrome.runtime.getURL === 'function';
+    const page = isExt ? chrome.runtime.getURL('compat.html') : 'compat.html';
+    try { window.location.href = page; } catch { try { window.open(page, '_self'); } catch {} }
   });
 }
 
