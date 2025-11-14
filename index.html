@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Manifest Viewer</title>
+    <meta http-equiv="refresh" content="0; url=app/viewer.html" />
+    <style>
+      html, body { height: 100%; margin: 0; }
+      body { display: grid; place-items: center; font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; background:#0b0f19; color:#e5e7eb; }
+      a { color: #8ab4f8; }
+      .wrap { text-align:center; padding: 24px; }
+      .small { opacity: .7; font-size: 13px; margin-top: 8px; }
+    </style>
+    <script>
+      (function redirect(){
+        try {
+          var target = 'app/viewer.html' + window.location.search + window.location.hash;
+          // Use replace so the back button doesn't land here again
+          window.location.replace(target);
+        } catch (e) {
+          // fallback: keep meta refresh and manual link below
+        }
+      })();
+    </script>
+  </head>
+  <body>
+    <div class="wrap">
+      <h1>Manifest Viewer</h1>
+      <p>Redirecting to the viewer… If you are not redirected, click the link below.</p>
+      <p><a href="app/viewer.html">Open Viewer</a></p>
+      <p class="small">Tip: GitHub Pages will serve this index.html from the repository root.</p>
+    </div>
+  </body>
+</html>
