@@ -3413,18 +3413,48 @@ if (urlInput.value) load();
 
 (function loadVersion() {
   const versionEl = document.getElementById('viewer-version');
+  const versionSection = document.getElementById('version-section');
   if (!versionEl) return;
+  const hide = () => { if (versionSection) versionSection.style.display = 'none'; };
   try {
     if (typeof chrome !== 'undefined' && chrome.runtime && typeof chrome.runtime.getManifest === 'function') {
       const manifest = chrome.runtime.getManifest();
-      versionEl.textContent = manifest.version || '...';
+      const v = manifest && typeof manifest.version === 'string' ? manifest.version.trim() : '';
+      if (v) {
+        versionEl.textContent = v;
+        if (versionSection) versionSection.style.display = '';
+      } else {
+        hide();
+      }
     } else {
-      versionEl.textContent = 'N/A';
+      hide();
     }
   } catch {
-    versionEl.textContent = 'N/A';
+    hide();
   }
 })();
+
+// Add hosted version link in footer when running as extension
+try {
+  if (typeof chrome !== 'undefined' && chrome.runtime && typeof chrome.runtime.getManifest === 'function') {
+    const footer = document.querySelector('footer small') || document.querySelector('footer');
+    if (footer && !document.getElementById('hosted-link')) {
+      const sep = document.createElement('span');
+      sep.textContent = ' | ';
+      sep.style.margin = '0 5px';
+      const a = document.createElement('a');
+      a.id = 'hosted-link';
+      a.href = 'https://123-test.stream';
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+      a.textContent = 'Hosted version';
+      a.style.color = 'inherit';
+      a.style.textDecoration = 'none';
+      footer.appendChild(sep);
+      footer.appendChild(a);
+    }
+  }
+} catch {}
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {

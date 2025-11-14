@@ -7,15 +7,23 @@ document.addEventListener('DOMContentLoaded', () => {
 
 
   const versionEl    = document.getElementById('popup-version');
+  const versionWrap  = document.getElementById('popup-version-section');
   
   if (versionEl) {
+    const hide = () => { if (versionWrap) versionWrap.style.display = 'none'; };
     try {
       // Get the version from the manifest
       const manifest = chrome.runtime.getManifest();
-      versionEl.textContent = manifest.version || '...';
+      const v = manifest && typeof manifest.version === 'string' ? manifest.version.trim() : '';
+      if (v) {
+        versionEl.textContent = v;
+        if (versionWrap) versionWrap.style.display = '';
+      } else {
+        hide();
+      }
     } catch (e) {
       console.error("Failed to load manifest version", e);
-      versionEl.textContent = 'N/A';
+      hide();
     }
   }
 
