@@ -2,11 +2,13 @@
   "name": "manifest-viewer-extension",
   "version": "1.0.0",
   "private": true,
+  "license": "Apache-2.0",
   "scripts": {
     "lint": "eslint \"app/**/*.js\" \"__tests__/**/*.js\" \"scripts/**/*.js\"",
     "lint:fix": "npm run lint -- --fix",
     "test": "jest",
-    "build": "npm run lint && npm test && node scripts/build-extension.js"
+    "build": "npm run lint && npm test && node scripts/build-extension.js",
+    "build:firefox": "npm run lint && npm test && node scripts/build-extension-firefox.js"
   },
   "devDependencies": {
     "archiver": "^6.0.1",
