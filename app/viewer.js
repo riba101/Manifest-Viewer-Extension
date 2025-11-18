@@ -41,7 +41,8 @@ let isHeadersPanelOpen = false;
 
 // Init from query params
 const params = new URLSearchParams(location.search);
-if (params.get('u')) urlInput.value = params.get('u');
+const initialUrlParam = params.get('u') || params.get('url'); // prefer legacy ?u=; accept ?url= but canonicalize to ?u=
+if (initialUrlParam) urlInput.value = initialUrlParam;
 if (params.get('ua')) uaInput.value = params.get('ua');
 if (uaInput && !uaInput.value) uaInput.value = navigator.userAgent || '';
 
@@ -580,7 +581,46 @@ function decodeHTML(s) {
 }
 
 function escapeAttrValue(s) {
-  return escapeHTML(s).replace(/"/g, '&quot;');
+  return escapeHTML(s).replace(/"/g, '"');
+}
+
+// Replace absolute URLs in plain text with clickable anchors that route through the viewer
+function linkifyAbsoluteUrls(text) {
+  const input = typeof text === 'string' ? text : '';
+  if (!input) return '';
+  const urlRe = /(https?:\/\/[^\s<>")'\]]+)/gi;
+  let out = '';
+  let last = 0;
+  let match;
+  while ((match = urlRe.exec(input)) !== null) {
+    out += escapeHTML(input.slice(last, match.index));
+    const url = match[0];
+    const safeHref = escapeAttrValue(url);
+    const safeTarget = escapeAttrValue(url);
+    out += `<a href="${safeHref}" class="token uri" data-manifest-link="1" data-manifest-target="${safeTarget}">${escapeHTML(url)}</a>`;
+    last = urlRe.lastIndex;
+  }
+  out += escapeHTML(input.slice(last));
+  return out;
+}
+
+// Render a JSON string token, linkifying if it contains an absolute URL
+function renderJsonStringToken(token) {
+  const s = typeof token === 'string' ? token : '""';
+  // token includes surrounding quotes
+  let decoded = null;
+  try {
+    decoded = JSON.parse(s);
+  } catch {
+    decoded = null;
+  }
+  if (decoded && /^https?:\/\//i.test(decoded)) {
+    const safeHref = escapeAttrValue(decoded);
+    const safeTarget = escapeAttrValue(decoded);
+    const textEsc = escapeHTML(decoded);
+    return `<span class="token string">"<a href="${safeHref}" class="token uri" data-manifest-link="1" data-manifest-target="${safeTarget}">${textEsc}</a>"</span>`;
+  }
+  return `<span class="token string">${escapeHTML(s)}</span>`;
 }
 
 function formatDuration(ms) {
@@ -1562,7 +1602,11 @@ function highlightJSON(text) {
       textForSpan = numVal;
     }
 
-    out.push(`<span class="token ${cls}">${escapeHTML(textForSpan)}</span>`);
+    if (cls === 'string') {
+      out.push(renderJsonStringToken(textForSpan));
+    } else {
+      out.push(`<span class="token ${cls}">${escapeHTML(textForSpan)}</span>`);
+    }
     lastIndex = jsonTokenRe.lastIndex;
   }
   out.push(escapeHTML(pretty.slice(lastIndex)));
@@ -1880,7 +1924,7 @@ function renderValidationView(view) {
         li.className = 'validation-item';
         const msg = document.createElement('span');
         msg.className = 'message';
-        msg.textContent = entry.message || '';
+        msg.innerHTML = linkifyAbsoluteUrls(entry.message || '');
         li.appendChild(msg);
         if (Number.isFinite(entry.line)) {
           const meta = document.createElement('span');
@@ -1942,7 +1986,7 @@ function renderValidationView(view) {
         errList.className = 'validation-child-list validation-child-list--error';
         childResult.errors.forEach((err) => {
           const li = document.createElement('li');
-          li.textContent = err.message || '';
+          li.innerHTML = linkifyAbsoluteUrls(err.message || '');
           errList.appendChild(li);
         });
         body.appendChild(errList);
@@ -1952,7 +1996,7 @@ function renderValidationView(view) {
         warnList.className = 'validation-child-list validation-child-list--warning';
         childResult.warnings.forEach((warn) => {
           const li = document.createElement('li');
-          li.textContent = warn.message || '';
+          li.innerHTML = linkifyAbsoluteUrls(warn.message || '');
           warnList.appendChild(li);
         });
         body.appendChild(warnList);
@@ -2066,6 +2110,22 @@ function updateActionButtons(mode) {
 }
 
 
+function updateViewerQueryParams({ url } = {}) {
+  try {
+    const p = new URLSearchParams(location.search);
+    if (url && typeof url === 'string' && url.trim()) {
+      p.set('u', url);
+    } else {
+      p.delete('u');
+    }
+    // Remove any non-canonical param name
+    p.delete('url');
+    const qs = p.toString();
+    const next = location.pathname + (qs ? '?' + qs : '') + location.hash;
+    history.replaceState(null, '', next);
+  } catch {}
+}
+
 async function load(options = {}) {
   const url = urlInput.value.trim();
   if (!url) return;
@@ -2119,6 +2179,9 @@ async function load(options = {}) {
     lastLoadedMode = mode;
     hasLoadedManifest = true;
     currentValidationView = null;
+
+    // Reflect the loaded URL in the viewer's query string for deep-linking on hosted version
+    updateViewerQueryParams({ url });
 
     const meta = {
       status,
@@ -3497,5 +3560,8 @@ if (typeof module !== 'undefined' && module.exports) {
     formatUuid,
     buildDashData,
     parseMp4Structure,
+    // expose for tests
+    highlightJSON,
+    linkifyAbsoluteUrls,
   };
 }
