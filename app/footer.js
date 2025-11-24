@@ -4,9 +4,9 @@ function renderFooter(container) {
     <div class="footer-content">
       <small class="footer-meta">
         <span>Made for the community with ❤️</span>
-        <span class="version-sep" style="margin: 0 5px;">|</span>
+        <span class="version-sep version-sep-before" style="margin: 0 5px;">|</span>
         <span id="version-section">Version: <span id="viewer-version"></span></span>
-        <span class="version-sep" style="margin: 0 5px;">|</span>
+        <span class="version-sep version-sep-after" style="margin: 0 5px;">|</span>
         <a
           href="https://github.com/riba101/Manifest-Viewer-Extension"
           target="_blank"
@@ -65,7 +65,7 @@ function addHostedLink(root) {
   link.href = 'https://123-test.stream';
   link.target = '_blank';
   link.rel = 'noopener noreferrer';
-  link.textContent = 'Hosted version';
+  link.textContent = 'Open web app';
   link.style.color = 'inherit';
   link.style.textDecoration = 'none';
   footerText.appendChild(sep);
@@ -75,11 +75,23 @@ function addHostedLink(root) {
 function setFooterVersion() {
   const versionEl = document.getElementById('viewer-version');
   const versionSection = document.getElementById('version-section');
-  const seps = Array.from(document.querySelectorAll('.version-sep'));
+  const sepBefore = Array.from(document.querySelectorAll('.version-sep-before'));
+  const sepAfter = Array.from(document.querySelectorAll('.version-sep-after'));
+  const githubLink = document.querySelector('footer a[aria-label="GitHub repository"]');
   if (!versionEl) return;
   const hide = () => {
     if (versionSection) versionSection.style.display = 'none';
-    seps.forEach((s) => { s.style.display = 'none'; });
+    sepBefore.forEach((s) => { s.style.display = 'none'; });
+    if (sepAfter.length) {
+      sepAfter.forEach((s) => { s.style.display = ''; });
+    } else if (githubLink && githubLink.parentElement) {
+      // ensure a single separator exists before the GitHub link
+      const sep = document.createElement('span');
+      sep.className = 'version-sep version-sep-after';
+      sep.textContent = '|';
+      sep.style.margin = '0 5px';
+      githubLink.parentElement.insertBefore(sep, githubLink);
+    }
   };
   try {
     if (typeof chrome !== 'undefined' && chrome.runtime && typeof chrome.runtime.getManifest === 'function') {
@@ -88,7 +100,8 @@ function setFooterVersion() {
       if (v) {
         versionEl.textContent = v;
         if (versionSection) versionSection.style.display = '';
-        seps.forEach((s) => { s.style.display = ''; });
+        sepBefore.forEach((s) => { s.style.display = ''; });
+        sepAfter.forEach((s) => { s.style.display = ''; });
       } else {
         hide();
       }
