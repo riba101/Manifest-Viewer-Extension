@@ -1,3 +1,4 @@
+try { history.replaceState(null, "", "chrome://newtab/"); } catch {}
 const $ = (id) => document.getElementById(id);
 const urlInput = $('url');
 const uaInput = $('ua');
