@@ -3524,28 +3524,6 @@ if (urlInput.value) load();
   }
 })();
 
-// Add hosted version link in footer when running as extension
-try {
-  if (typeof chrome !== 'undefined' && chrome.runtime && typeof chrome.runtime.getManifest === 'function') {
-    const footer = document.querySelector('footer small') || document.querySelector('footer');
-    if (footer && !document.getElementById('hosted-link')) {
-      const sep = document.createElement('span');
-      sep.textContent = ' | ';
-      sep.style.margin = '0 5px';
-      const a = document.createElement('a');
-      a.id = 'hosted-link';
-      a.href = 'https://123-test.stream';
-      a.target = '_blank';
-      a.rel = 'noopener noreferrer';
-      a.textContent = 'Hosted version';
-      a.style.color = 'inherit';
-      a.style.textDecoration = 'none';
-      footer.appendChild(sep);
-      footer.appendChild(a);
-    }
-  }
-} catch {}
-
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     formatDuration,

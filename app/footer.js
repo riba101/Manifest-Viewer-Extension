@@ -4,9 +4,9 @@ function renderFooter(container) {
     <div class="footer-content">
       <small class="footer-meta">
         <span>Made for the community with ❤️</span>
-        <span style="margin: 0 5px;">|</span>
+        <span class="version-sep" style="margin: 0 5px;">|</span>
         <span id="version-section">Version: <span id="viewer-version"></span></span>
-        <span style="margin: 0 5px;">|</span>
+        <span class="version-sep" style="margin: 0 5px;">|</span>
         <a
           href="https://github.com/riba101/Manifest-Viewer-Extension"
           target="_blank"
@@ -45,11 +45,42 @@ function renderFooter(container) {
   `;
 }
 
+function addHostedLink(root) {
+  const footerText = root.querySelector('.footer-meta') || root;
+  if (!footerText || document.getElementById('hosted-link')) return;
+
+  try {
+    if (typeof chrome === 'undefined' || !chrome.runtime || typeof chrome.runtime.getManifest !== 'function') {
+      return;
+    }
+  } catch {
+    return;
+  }
+
+  const sep = document.createElement('span');
+  sep.textContent = ' | ';
+  sep.style.margin = '0 5px';
+  const link = document.createElement('a');
+  link.id = 'hosted-link';
+  link.href = 'https://123-test.stream';
+  link.target = '_blank';
+  link.rel = 'noopener noreferrer';
+  link.textContent = 'Hosted version';
+  link.style.color = 'inherit';
+  link.style.textDecoration = 'none';
+  footerText.appendChild(sep);
+  footerText.appendChild(link);
+}
+
 function setFooterVersion() {
   const versionEl = document.getElementById('viewer-version');
   const versionSection = document.getElementById('version-section');
+  const seps = Array.from(document.querySelectorAll('.version-sep'));
   if (!versionEl) return;
-  const hide = () => { if (versionSection) versionSection.style.display = 'none'; };
+  const hide = () => {
+    if (versionSection) versionSection.style.display = 'none';
+    seps.forEach((s) => { s.style.display = 'none'; });
+  };
   try {
     if (typeof chrome !== 'undefined' && chrome.runtime && typeof chrome.runtime.getManifest === 'function') {
       const manifest = chrome.runtime.getManifest();
@@ -57,6 +88,7 @@ function setFooterVersion() {
       if (v) {
         versionEl.textContent = v;
         if (versionSection) versionSection.style.display = '';
+        seps.forEach((s) => { s.style.display = ''; });
       } else {
         hide();
       }
@@ -72,6 +104,7 @@ function initFooter() {
   const el = document.getElementById('app-footer');
   if (el) renderFooter(el);
   setFooterVersion();
+  if (el) addHostedLink(el);
 }
 
 if (document.readyState === 'loading') {
