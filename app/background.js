@@ -4,6 +4,66 @@
 // - Downloads fallback: cancel forced downloads of .mpd/.m3u8 and open viewer
 // - No webRequest / webRequestBlocking
 
+let isStartup = true;
+const startupTabs = new Set();
+
+const STARTUP_NEW_TAB_CAPTURE_MS = 60000;
+let startupCaptureUntil = 0;
+
+function isDuringExtendedStartup() {
+  if (!startupCaptureUntil) return false;
+  if (Date.now() > startupCaptureUntil) {
+    startupCaptureUntil = 0;
+    return false;
+  }
+  return true;
+}
+
+function getTabUrlCandidate(tab) {
+  if (!tab) return "";
+  const pending = typeof tab.pendingUrl === "string" ? tab.pendingUrl.trim() : "";
+  if (pending) return pending;
+  const current = typeof tab.url === "string" ? tab.url.trim() : "";
+  return current;
+}
+
+function isChromeInternalUrl(url) {
+  if (!url) return false;
+  const lower = url.toLowerCase();
+  if (lower.startsWith("chrome://newtab")) return true;
+  return (
+    lower.startsWith("chrome://") ||
+    lower.startsWith("chrome-extension://") ||
+    lower.startsWith("edge://") ||
+    lower.startsWith("devtools://") ||
+    lower.startsWith("about:")
+  );
+}
+
+function shouldFlagAsStartupTab(tab) {
+  if (!tab || typeof tab.id !== "number") return false;
+  if (startupTabs.has(tab.id)) return false;
+
+  if (typeof tab.openerTabId === "number" && tab.openerTabId >= 0) {
+    return false;
+  }
+
+  const url = getTabUrlCandidate(tab);
+  if (!url) {
+    return tab.discarded === true;
+  }
+
+  if (isChromeInternalUrl(url)) return false;
+
+  return /^(https?|file|ftp):/i.test(url);
+}
+
+function rememberStartupTab(tab) {
+  if (shouldFlagAsStartupTab(tab)) {
+    startupTabs.add(tab.id);
+  }
+}
+
 // -------------------------------
 // State & storage helpers
 // -------------------------------
@@ -40,6 +100,26 @@ chrome.runtime.onInstalled.addListener(() => {
   });
 });
 
+// Track tabs present at browser startup so we don't auto-open viewer in restored sessions
+function captureStartupTabs() {
+  try {
+    if (!chrome.tabs || typeof chrome.tabs.query !== "function") {
+      isStartup = false;
+      return;
+    }
+    chrome.tabs.query({}, (tabs) => {
+      try {
+        (tabs || []).forEach(rememberStartupTab);
+      } finally {
+        // mark startup phase complete once we've captured initial tabs
+        isStartup = false;
+      }
+    });
+  } catch {
+    isStartup = false;
+  }
+}
+
 // Defensive cleanup on browser startup: remove any lingering dynamic rules
 if (
   chrome &&
@@ -57,6 +137,35 @@ if (
     } catch {
       // ignore
     }
+    captureStartupTabs();
+    startupCaptureUntil = Date.now() + STARTUP_NEW_TAB_CAPTURE_MS;
+  });
+} else {
+  // If onStartup isn't available, disable startup gating
+  isStartup = false;
+}
+
+// Keep startupTabs up to date
+if (
+  chrome &&
+  chrome.tabs &&
+  chrome.tabs.onRemoved &&
+  typeof chrome.tabs.onRemoved.addListener === "function"
+) {
+  chrome.tabs.onRemoved.addListener((tabId) => {
+    startupTabs.delete(tabId);
+  });
+}
+
+if (
+  chrome &&
+  chrome.tabs &&
+  chrome.tabs.onCreated &&
+  typeof chrome.tabs.onCreated.addListener === "function"
+) {
+  chrome.tabs.onCreated.addListener((tab) => {
+    if (!isDuringExtendedStartup()) return;
+    rememberStartupTab(tab);
   });
 }
 
@@ -189,8 +298,10 @@ const redirectingTabs = new Set();
 // EARLY redirect (prevents most .mpd downloads)
 chrome.webNavigation.onBeforeNavigate.addListener(async (details) => {
   try {
+    if (isStartup) return;
     if (details.frameId !== 0 || details.tabId < 0) return;
     if (isExtensionUrl(details.url)) return;
+    if (startupTabs.has(details.tabId)) return;
 
     const { autoOpenViewer = true } = await getSync({ autoOpenViewer: true });
     if (!autoOpenViewer) return;
@@ -210,8 +321,10 @@ chrome.webNavigation.onBeforeNavigate.addListener(async (details) => {
 // Fallback redirect
 chrome.webNavigation.onCommitted.addListener(async (details) => {
   try {
+    if (isStartup) return;
     if (details.frameId !== 0 || details.tabId < 0) return;
     if (isExtensionUrl(details.url)) return;
+    if (startupTabs.has(details.tabId)) return;
 
     const { autoOpenViewer = true } = await getSync({ autoOpenViewer: true });
     if (!autoOpenViewer) return;
@@ -239,6 +352,13 @@ chrome.webNavigation.onErrorOccurred.addListener((details) => {
 // -------------------------------
 chrome.downloads.onCreated.addListener(async (item) => {
   try {
+    // Only handle downloads that are clearly associated with a tab
+    if (!item || typeof item.tabId !== "number") return;
+
+    // Do not resurrect old manifest downloads on browser startup or from restored tabs
+    if (isStartup) return;
+    if (startupTabs.has(item.tabId)) return;
+
     const { autoOpenViewer = true } = await getSync({ autoOpenViewer: true });
     if (!autoOpenViewer) return;
 
