@@ -11,6 +11,30 @@
   const RESULTS = { env: {}, codecs: [], mse: [], mediaCapabilities: {}, drmMatrix: [] };
   // Toggle to suppress MediaCapabilities.decodingInfo for all codecs
 
+  async function measureRefreshRate(samples = 12, timeoutMs = 800) {
+    return new Promise((resolve) => {
+      if (typeof requestAnimationFrame !== 'function') {
+        resolve(null);
+        return;
+      }
+      const times = [];
+      let last;
+      const start = performance.now();
+      const done = () => {
+        if (!times.length) return resolve(null);
+        const avg = times.reduce((a, b) => a + b, 0) / times.length;
+        resolve(Math.round(1000 / avg));
+      };
+      const step = (ts) => {
+        if (ts - start > timeoutMs) return done();
+        if (last !== undefined) times.push(ts - last);
+        last = ts;
+        if (times.length >= samples) return done();
+        requestAnimationFrame(step);
+      };
+      requestAnimationFrame(step);
+    });
+  }
 
   function setTheme(theme) {
     const html = document.documentElement;
@@ -86,11 +110,15 @@
     }
   }
 
-  function getEnv() {
+  async function getEnv() {
     const nav = navigator || {};
     const mediaCap = 'mediaCapabilities' in navigator;
     const mse = typeof window.MediaSource !== 'undefined';
     const eme = !!(navigator.requestMediaKeySystemAccess);
+    const scr = typeof window !== 'undefined' && window.screen ? window.screen : null;
+    const res = scr && scr.width && scr.height ? `${scr.width} x ${scr.height}` : 'n/a';
+    const availRes = scr && scr.availWidth && scr.availHeight ? `${scr.availWidth} x ${scr.availHeight}` : '';
+    const refresh = await measureRefreshRate();
     const hwConcurrency = nav.hardwareConcurrency || 'n/a';
     const mem = nav.deviceMemory || 'n/a';
     const ua = nav.userAgent || '';
@@ -103,7 +131,22 @@
     const colorGamut = mm('(color-gamut: rec2020)') ? 'Rec.2020' : mm('(color-gamut: p3)') ? 'P3' : (mm('(color-gamut: srgb)') ? 'sRGB' : 'Unknown');
     const hdrSupport = mm('(dynamic-range: high)') || mm('(video-dynamic-range: high)');
 
-    RESULTS.env = { ua, vendor, platform, languages: lang, mediaCapabilities: mediaCap, mse, eme, hardwareConcurrency: hwConcurrency, deviceMemory: mem, colorGamut, hdr: hdrSupport };
+    RESULTS.env = {
+      ua,
+      vendor,
+      platform,
+      languages: lang,
+      mediaCapabilities: mediaCap,
+      mse,
+      eme,
+      hardwareConcurrency: hwConcurrency,
+      deviceMemory: mem,
+      screenResolution: res,
+      availableScreenResolution: availRes,
+      screenFrequency: refresh,
+      colorGamut,
+      hdr: hdrSupport
+    };
 
     envEl.innerHTML = '';
     addKV('User-Agent', ua);
@@ -115,6 +158,8 @@
     addKV('Encrypted Media (EME)', eme ? 'Yes' : 'No');
     addKV('CPU Threads', String(hwConcurrency));
     addKV('Device Memory (GB)', String(mem));
+    addKV('Screen Resolution', availRes && availRes !== res ? `${res} (avail ${availRes})` : res);
+    addKV('Screen Frequency', refresh ? `${refresh} Hz` : 'n/a');
     addKV('Color Gamut', colorGamut);
     addKV('HDR', hdrSupport ? 'Yes' : 'No');
   }
@@ -354,7 +399,7 @@
       }
     }
 
-    getEnv();
+    await getEnv();
 
     await testCodecs();
     await testDRM();
