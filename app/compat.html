@@ -12,6 +12,10 @@
     <link rel="apple-touch-icon" sizes="180x180" href="icons/apple-touch-icon.png" />
     <link rel="manifest" href="icons/site.webmanifest" />
     <style>
+      * { box-sizing: border-box; }
+      html, body { width: 100%; max-width: 100%; }
+      body { margin: 0; overflow-x: hidden; }
+
       .compat-topbar {
         display: flex;
         gap: 8px;
@@ -22,6 +26,10 @@
         position: sticky;
         top: 0;
         z-index: 10;
+        width: 100%;
+        max-width: 100%;
+        margin: 0 auto;
+        padding: 10px 8px;
       }
       .compat-topbar .spacer { flex: 1; }
       .compat-topbar button {
@@ -38,16 +46,21 @@
       .compat-topbar button:hover { border-color: var(--acc1); }
 
       main.compat {
-        padding: 12px;
+        padding: 8px 8px 20px;
         display: grid;
-        gap: 12px;
+        gap: 10px;
+        width: 100%;
+        max-width: 100%;
+        margin: 0 auto;
       }
 
       .card {
         border: 1px solid var(--border);
         border-radius: 12px;
         background: var(--panel);
-        padding: 14px 16px;
+        padding: 12px 14px;
+        width: 100%;
+        overflow-x: hidden;
       }
 
       .card h2 {
@@ -59,15 +72,22 @@
 
       .kv {
         display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
         gap: 8px 12px;
+        width: 100%;
       }
-      .kv .item { display:flex; flex-direction:column; gap:2px; }
+      .kv .item { display:flex; flex-direction:column; gap:2px; word-break: break-word; }
       .kv .item strong { font-weight:600; }
       .kv .item span { color: var(--muted); }
 
       table.matrix { width:100%; border-collapse: collapse; font-size: 12px; }
-      table.matrix th, table.matrix td { border:1px solid var(--border); padding:6px 8px; text-align:left; }
+      table.matrix th, table.matrix td {
+        border:1px solid var(--border);
+        padding:6px 8px;
+        text-align:left;
+        word-break: break-word;
+        white-space: normal;
+      }
       table.matrix thead { background: rgba(138,180,248,.12); }
       .pill { display:inline-flex; align-items:center; gap:6px; padding:2px 8px; border-radius:999px; font-size:11px; }
       .ok { background: rgba(52,211,153, .15); color: var(--acc3); border: 1px solid rgba(52,211,153, .35); }
@@ -78,6 +98,75 @@
       .code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
 
       .actions { display:flex; gap:8px; align-items:center; }
+
+      /* Mobile tweaks */
+      @media (max-width: 900px) {
+        .compat-topbar {
+          display: flex;
+          flex-wrap: wrap;
+          align-items: center;
+          gap: 8px;
+          padding: 10px;
+        }
+        .compat-topbar strong {
+          width: 100%;
+          order: -1;
+          font-size: 15px;
+          text-align: left;
+        }
+        .compat-topbar .spacer { display: none; }
+        .compat-topbar button {
+          height: 34px;
+        }
+        main.compat {
+          padding: 8px;
+          width: 100%;
+          max-width: 100%;
+          gap: 10px;
+        }
+        .kv {
+          grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+        }
+        #codecTableWrapper,
+        #drmTableWrapper,
+        #customResults {
+          overflow-x: auto;
+          width: 100%;
+        }
+        table.matrix {
+          min-width: 0;
+          font-size: 11px;
+          table-layout: fixed;
+        }
+      }
+
+      @media (max-width: 760px) {
+        .compat-topbar button { height: 36px; }
+        .kv { grid-template-columns: 1fr; }
+        .card { padding: 12px; }
+        table.matrix th, table.matrix td { padding: 5px 6px; font-size: 10px; }
+      }
+
+      @media (max-width: 640px) {
+        body { font-size: 14px; }
+        main.compat {
+          width: 100%;
+          padding: 10px 8px 16px;
+        }
+        .card {
+          padding: 12px;
+        }
+        .kv {
+          grid-template-columns: 1fr;
+          gap: 6px 8px;
+        }
+        table.matrix {
+          min-width: 0;
+          width: 100%;
+          table-layout: fixed;
+          font-size: 10.5px;
+        }
+      }
     </style>
   </head>
   <body>

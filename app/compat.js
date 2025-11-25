@@ -115,10 +115,6 @@
     const mediaCap = 'mediaCapabilities' in navigator;
     const mse = typeof window.MediaSource !== 'undefined';
     const eme = !!(navigator.requestMediaKeySystemAccess);
-    const scr = typeof window !== 'undefined' && window.screen ? window.screen : null;
-    const res = scr && scr.width && scr.height ? `${scr.width} x ${scr.height}` : 'n/a';
-    const availRes = scr && scr.availWidth && scr.availHeight ? `${scr.availWidth} x ${scr.availHeight}` : '';
-    const refresh = await measureRefreshRate();
     const hwConcurrency = nav.hardwareConcurrency || 'n/a';
     const mem = nav.deviceMemory || 'n/a';
     const ua = nav.userAgent || '';
@@ -127,6 +123,10 @@
     const lang = (nav.languages && nav.languages.join(', ')) || nav.language || '';
 
     // Display capabilities
+    const scr = typeof window !== 'undefined' && window.screen ? window.screen : null;
+    const res = scr && scr.width && scr.height ? `${scr.width} x ${scr.height}` : 'n/a';
+    const availRes = scr && scr.availWidth && scr.availHeight ? `${scr.availWidth} x ${scr.availHeight}` : '';
+    const refresh = await measureRefreshRate();
     const mm = (q) => (typeof window !== 'undefined' && window.matchMedia ? window.matchMedia(q).matches : false);
     const colorGamut = mm('(color-gamut: rec2020)') ? 'Rec.2020' : mm('(color-gamut: p3)') ? 'P3' : (mm('(color-gamut: srgb)') ? 'sRGB' : 'Unknown');
     const hdrSupport = mm('(dynamic-range: high)') || mm('(video-dynamic-range: high)');
