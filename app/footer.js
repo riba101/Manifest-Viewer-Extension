@@ -29,21 +29,22 @@ function renderFooter(container) {
           </svg>
         </a>
       </small>
-      <div class="supporters">
-        <span class="supporters__label">Supported by</span>
-        <a
-          class="supporters__logo"
-          href="https://onair.events"
-          target="_blank"
-          rel="noopener noreferrer"
-          aria-label="OnAir.Events"
-        >
-          <img src="supporters/logos/onair.svg" alt="OnAir.Events logo" />
-        </a>
-      </div>
     </div>
   `;
 }
+
+      // <div class="supporters">
+      //   <span class="supporters__label">Supported by</span>
+      //   <a
+      //     class="supporters__logo"
+      //     href="https://onair.events"
+      //     target="_blank"
+      //     rel="noopener noreferrer"
+      //     aria-label="OnAir.Events"
+      //   >
+      //     <img src="supporters/logos/onair.svg" alt="OnAir.Events logo" />
+      //   </a>
+      // </div>
 
 function addHostedLink(root) {
   const footerText = root.querySelector('.footer-meta') || root;
