@@ -335,6 +335,7 @@
     'com.huawei.wiseplay': ['HW_SECURE_ALL', 'HW_SECURE_DECODE', 'HW_SECURE_CRYPTO', 'SW_SECURE_DECODE', 'SW_SECURE_CRYPTO', ''],
     'com.apple.fps.1_0': ['']
   };
+  const ENCRYPTION_SCHEMES = ['cenc', 'cbcs'];
 
   const DRM_CODECS = [
     // Video codecs
@@ -350,29 +351,29 @@
 
   async function testDRM() {
     const hasEME = !!navigator.requestMediaKeySystemAccess;
+    drmWrap.innerHTML = '';
+    const drmNotice = document.createElement('div');
+    drmNotice.className = 'note';
+    drmNotice.style.marginBottom = '8px';
+    if (!hasEME) {
+      drmNotice.textContent = 'DRM/EME is not supported on this browser.';
+      drmWrap.appendChild(drmNotice);
+    }
+
     const table = document.createElement('table');
     table.className = 'matrix';
     const thead = document.createElement('thead');
     const hr = document.createElement('tr');
     hr.appendChild(th('Codec'));
-    KEY_SYSTEMS.forEach((ks) => hr.appendChild(th(ks.label)));
-    thead.appendChild(hr);
-    table.appendChild(thead);
-    const tb = document.createElement('tbody');
 
     const matrix = [];
 
     for (const codec of DRM_CODECS) {
-      const tr = document.createElement('tr');
-      tr.appendChild(td(codec.label));
       const row = { codecId: codec.id, label: codec.label, keySystems: {} };
 
       for (const ks of KEY_SYSTEMS) {
-        const cell = document.createElement('td');
         if (!hasEME) {
-          cell.appendChild(pill(false, 'No'));
-          row.keySystems[ks.id] = { supported: false, error: 'EME not available' };
-          tr.appendChild(cell);
+          row.keySystems[ks.id] = { supported: false, error: 'EME not available', schemes: {} };
           continue;
         }
         try {
@@ -385,41 +386,143 @@
 
           const levels = ROBUSTNESS[ks.id] || [''];
           const attempts = [];
+          const schemes = {};
+          let supported = false;
           let best = null;
+          let bestScheme = null;
 
-          for (const rlevel of levels) {
-            const cap = { contentType: codec.contentType };
-            if (rlevel) cap.robustness = rlevel;
-            const cfg = codec.kind === 'video'
-              ? { ...base, videoCapabilities: [ cap ] }
-              : { ...base, audioCapabilities: [ cap ] };
-            try {
-              const access = await navigator.requestMediaKeySystemAccess(ks.id, [cfg]);
-              const ok = !!access;
-              attempts.push({ robustness: rlevel || '', supported: ok });
-              if (ok) { best = best === null ? (rlevel || '') : best; break; }
-            } catch (e) {
-              attempts.push({ robustness: rlevel || '', supported: false, error: (e && e.message) || String(e) });
+          for (const scheme of ENCRYPTION_SCHEMES) {
+            const schemeAttempts = [];
+            let schemeBest = null;
+            let schemeSupported = false;
+
+            for (const rlevel of levels) {
+              const cap = { contentType: codec.contentType, encryptionScheme: scheme };
+              if (rlevel) cap.robustness = rlevel;
+              const cfg = codec.kind === 'video'
+                ? { ...base, videoCapabilities: [ cap ] }
+                : { ...base, audioCapabilities: [ cap ] };
+              try {
+                const access = await navigator.requestMediaKeySystemAccess(ks.id, [cfg]);
+                const ok = !!access;
+                schemeAttempts.push({ robustness: rlevel || '', encryptionScheme: scheme, supported: ok });
+                attempts.push({ robustness: rlevel || '', encryptionScheme: scheme, supported: ok });
+                if (ok) {
+                  schemeSupported = true;
+                  if (schemeBest === null) schemeBest = rlevel || '';
+                  break;
+                }
+              } catch (e) {
+                const msg = (e && e.message) || String(e);
+                schemeAttempts.push({ robustness: rlevel || '', encryptionScheme: scheme, supported: false, error: msg });
+                attempts.push({ robustness: rlevel || '', encryptionScheme: scheme, supported: false, error: msg });
+              }
+            }
+
+            schemes[scheme] = { supported: schemeSupported, bestRobustness: schemeBest, attempts: schemeAttempts };
+            if (schemeSupported) {
+              supported = true;
+              if (best === null) best = schemeBest;
+              if (bestScheme === null) bestScheme = scheme;
             }
           }
 
-          const supported = attempts.some(t => t.supported);
-          row.keySystems[ks.id] = { supported, bestRobustness: best, attempts };
-          const label = supported ? (best ? `Yes (${best})` : 'Yes') : 'No';
-          cell.appendChild(pill(supported, label));
+          // Fallback probe without specifying encryptionScheme for older implementations
+          if (!supported) {
+            const defaultAttempts = [];
+            let defaultBest = null;
+            let defaultSupported = false;
+            for (const rlevel of levels) {
+              const cap = { contentType: codec.contentType };
+              if (rlevel) cap.robustness = rlevel;
+              const cfg = codec.kind === 'video'
+                ? { ...base, videoCapabilities: [ cap ] }
+                : { ...base, audioCapabilities: [ cap ] };
+              try {
+                const access = await navigator.requestMediaKeySystemAccess(ks.id, [cfg]);
+                const ok = !!access;
+                defaultAttempts.push({ robustness: rlevel || '', encryptionScheme: '', supported: ok });
+                attempts.push({ robustness: rlevel || '', encryptionScheme: '', supported: ok });
+                if (ok) {
+                  defaultSupported = true;
+                  if (defaultBest === null) defaultBest = rlevel || '';
+                  break;
+                }
+              } catch (e) {
+                const msg = (e && e.message) || String(e);
+                defaultAttempts.push({ robustness: rlevel || '', encryptionScheme: '', supported: false, error: msg });
+                attempts.push({ robustness: rlevel || '', encryptionScheme: '', supported: false, error: msg });
+              }
+            }
+            schemes[''] = { supported: defaultSupported, bestRobustness: defaultBest, attempts: defaultAttempts };
+            if (defaultSupported) {
+              supported = true;
+              if (best === null) best = defaultBest;
+              if (bestScheme === null) bestScheme = '';
+            }
+          }
+
+          row.keySystems[ks.id] = { supported, bestRobustness: best, bestEncryptionScheme: bestScheme, attempts, schemes };
         } catch (err) {
           const msg = (err && err.message) || String(err);
-          row.keySystems[ks.id] = { supported: false, error: msg };
-          cell.appendChild(pill(false, 'No'));
+          row.keySystems[ks.id] = { supported: false, error: msg, schemes: {} };
         }
-        tr.appendChild(cell);
       }
       matrix.push(row);
+    }
+
+    const visibleKeySystems = KEY_SYSTEMS.filter((ks) => matrix.some((row) => row.keySystems[ks.id] && row.keySystems[ks.id].supported));
+    const isNarrow = (typeof window !== 'undefined' && window.matchMedia)
+      ? window.matchMedia('(max-width: 639px)').matches
+      : (typeof window !== 'undefined' ? window.innerWidth < 640 : false);
+    const keySystemsToRender = isNarrow ? visibleKeySystems : KEY_SYSTEMS;
+    const narrowNote = (isNarrow && visibleKeySystems.length && visibleKeySystems.length < KEY_SYSTEMS.length)
+      ? 'Only DRM key systems that report support are shown on small screens.'
+      : '';
+
+    if (!keySystemsToRender.length) {
+      if (hasEME && !drmNotice.textContent) {
+        drmNotice.textContent = 'No DRM key systems report as supported on this browser.';
+        drmWrap.appendChild(drmNotice);
+      }
+      RESULTS.drmMatrix = matrix;
+      return;
+    }
+
+    keySystemsToRender.forEach((ks) => hr.appendChild(th(ks.label)));
+    thead.appendChild(hr);
+    table.appendChild(thead);
+    const tb = document.createElement('tbody');
+
+    for (const row of matrix) {
+      const tr = document.createElement('tr');
+      tr.appendChild(td(row.label));
+      for (const ks of keySystemsToRender) {
+        const cell = document.createElement('td');
+        const r = row.keySystems[ks.id] || { supported: false };
+        let schemeLabel = '';
+        if (r.schemes) {
+          const parts = [];
+          if (r.schemes.cenc && r.schemes.cenc.supported) parts.push('CENC');
+          if (r.schemes.cbcs && r.schemes.cbcs.supported) parts.push('CBCS');
+          schemeLabel = parts.length ? ` (${parts.join(', ')})` : '';
+        }
+        const label = r.supported ? `Yes${schemeLabel || (r.bestRobustness ? ` (${r.bestRobustness})` : '')}` : 'No';
+        cell.appendChild(pill(!!r.supported, label));
+        tr.appendChild(cell);
+      }
       tb.appendChild(tr);
     }
 
     table.appendChild(tb);
-    drmWrap.innerHTML = '';
+    if (drmNotice.textContent) drmWrap.appendChild(drmNotice);
+    if (narrowNote) {
+      const note = document.createElement('div');
+      note.className = 'note';
+      note.style.marginBottom = '8px';
+      note.textContent = narrowNote;
+      drmWrap.appendChild(note);
+    }
     drmWrap.appendChild(table);
     RESULTS.drmMatrix = matrix;
   }
