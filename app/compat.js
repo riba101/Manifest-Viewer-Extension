@@ -351,21 +351,6 @@
 
   async function testDRM() {
     const hasEME = !!navigator.requestMediaKeySystemAccess;
-    drmWrap.innerHTML = '';
-    const drmNotice = document.createElement('div');
-    drmNotice.className = 'note';
-    drmNotice.style.marginBottom = '8px';
-    if (!hasEME) {
-      drmNotice.textContent = 'DRM/EME is not supported on this browser.';
-      drmWrap.appendChild(drmNotice);
-    }
-
-    const table = document.createElement('table');
-    table.className = 'matrix';
-    const thead = document.createElement('thead');
-    const hr = document.createElement('tr');
-    hr.appendChild(th('Codec'));
-
     const matrix = [];
 
     for (const codec of DRM_CODECS) {
@@ -471,60 +456,9 @@
       matrix.push(row);
     }
 
-    const visibleKeySystems = KEY_SYSTEMS.filter((ks) => matrix.some((row) => row.keySystems[ks.id] && row.keySystems[ks.id].supported));
-    const isNarrow = (typeof window !== 'undefined' && window.matchMedia)
-      ? window.matchMedia('(max-width: 639px)').matches
-      : (typeof window !== 'undefined' ? window.innerWidth < 640 : false);
-    const keySystemsToRender = isNarrow ? visibleKeySystems : KEY_SYSTEMS;
-    const narrowNote = (isNarrow && visibleKeySystems.length && visibleKeySystems.length < KEY_SYSTEMS.length)
-      ? 'Only DRM key systems that report support are shown on small screens.'
-      : '';
-
-    if (!keySystemsToRender.length) {
-      if (hasEME && !drmNotice.textContent) {
-        drmNotice.textContent = 'No DRM key systems report as supported on this browser.';
-        drmWrap.appendChild(drmNotice);
-      }
-      RESULTS.drmMatrix = matrix;
-      return;
-    }
-
-    keySystemsToRender.forEach((ks) => hr.appendChild(th(ks.label)));
-    thead.appendChild(hr);
-    table.appendChild(thead);
-    const tb = document.createElement('tbody');
-
-    for (const row of matrix) {
-      const tr = document.createElement('tr');
-      tr.appendChild(td(row.label));
-      for (const ks of keySystemsToRender) {
-        const cell = document.createElement('td');
-        const r = row.keySystems[ks.id] || { supported: false };
-        let schemeLabel = '';
-        if (r.schemes) {
-          const parts = [];
-          if (r.schemes.cenc && r.schemes.cenc.supported) parts.push('CENC');
-          if (r.schemes.cbcs && r.schemes.cbcs.supported) parts.push('CBCS');
-          schemeLabel = parts.length ? ` (${parts.join(', ')})` : '';
-        }
-        const label = r.supported ? `Yes${schemeLabel || (r.bestRobustness ? ` (${r.bestRobustness})` : '')}` : 'No';
-        cell.appendChild(pill(!!r.supported, label));
-        tr.appendChild(cell);
-      }
-      tb.appendChild(tr);
-    }
-
-    table.appendChild(tb);
-    if (drmNotice.textContent) drmWrap.appendChild(drmNotice);
-    if (narrowNote) {
-      const note = document.createElement('div');
-      note.className = 'note';
-      note.style.marginBottom = '8px';
-      note.textContent = narrowNote;
-      drmWrap.appendChild(note);
-    }
-    drmWrap.appendChild(table);
     RESULTS.drmMatrix = matrix;
+    drmState = { matrix, hasEME };
+    renderDRM();
   }
 
   async function runAll() {
@@ -578,6 +512,95 @@
 
   const customRunBtn = $('runCustom');
   const customResults = $('customResults');
+  let drmState = { matrix: [], hasEME: false };
+
+  function renderDRM() {
+    if (!drmWrap) return;
+    const { matrix, hasEME } = drmState;
+    drmWrap.innerHTML = '';
+    const drmNotice = document.createElement('div');
+    drmNotice.className = 'note';
+    drmNotice.style.marginBottom = '8px';
+    if (!hasEME) {
+      drmNotice.textContent = 'DRM/EME is not supported on this browser.';
+      drmWrap.appendChild(drmNotice);
+    }
+
+    if (!matrix.length) {
+      if (hasEME && !drmNotice.textContent) {
+        drmNotice.textContent = 'Run compatibility checks to populate DRM results.';
+        drmWrap.appendChild(drmNotice);
+      }
+      return;
+    }
+
+    const visibleKeySystems = KEY_SYSTEMS.filter((ks) => matrix.some((row) => row.keySystems[ks.id] && row.keySystems[ks.id].supported));
+    const isNarrow = (typeof window !== 'undefined' && window.matchMedia)
+      ? window.matchMedia('(max-width: 639px)').matches
+      : (typeof window !== 'undefined' ? window.innerWidth < 640 : false);
+    const keySystemsToRender = isNarrow ? visibleKeySystems : KEY_SYSTEMS;
+    const narrowNote = (isNarrow && visibleKeySystems.length && visibleKeySystems.length < KEY_SYSTEMS.length)
+      ? 'Only DRM key systems that report support are shown!'
+      : '';
+
+    if (!keySystemsToRender.length) {
+      if (hasEME && !drmNotice.textContent) {
+        drmNotice.textContent = 'No DRM key systems report as supported on this browser.';
+        drmWrap.appendChild(drmNotice);
+      }
+      return;
+    }
+
+    const table = document.createElement('table');
+    table.className = 'matrix';
+    const thead = document.createElement('thead');
+    const hr = document.createElement('tr');
+    hr.appendChild(th('Codec'));
+    keySystemsToRender.forEach((ks) => hr.appendChild(th(ks.label)));
+    thead.appendChild(hr);
+    table.appendChild(thead);
+
+    const tb = document.createElement('tbody');
+    for (const row of matrix) {
+      const tr = document.createElement('tr');
+      tr.appendChild(td(row.label));
+      for (const ks of keySystemsToRender) {
+        const cell = document.createElement('td');
+        const r = row.keySystems[ks.id] || { supported: false };
+        let schemeLabel = '';
+        if (r.schemes) {
+          const parts = [];
+          const addPart = (name, data) => {
+            if (!data || !data.supported) return;
+            const robustness = data.bestRobustness ? `:${data.bestRobustness}` : '';
+            parts.push(`${name}${robustness}`);
+          };
+          addPart('CENC', r.schemes.cenc);
+          addPart('CBCS', r.schemes.cbcs);
+          if (parts.length) schemeLabel = ` (${parts.join(', ')})`;
+        }
+        const label = r.supported ? `Yes${schemeLabel || (r.bestRobustness ? ` (${r.bestRobustness})` : '')}` : 'No';
+        cell.appendChild(pill(!!r.supported, label));
+        tr.appendChild(cell);
+      }
+      tb.appendChild(tr);
+    }
+    table.appendChild(tb);
+
+    if (drmNotice.textContent) drmWrap.appendChild(drmNotice);
+    if (narrowNote) {
+      const note = document.createElement('div');
+      note.className = 'note';
+      note.style.marginBottom = '8px';
+      note.style.color = 'var(--error)';
+      note.textContent = narrowNote;
+      drmWrap.appendChild(note);
+    }
+    drmWrap.appendChild(table);
+  }
+  if (typeof window !== 'undefined') {
+    window.addEventListener('resize', () => renderDRM());
+  }
 
   // Normalize user input: accept either full contentType or just a codec string
   function normalizeContentInput(raw) {
