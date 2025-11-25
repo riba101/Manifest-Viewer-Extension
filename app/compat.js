@@ -83,6 +83,43 @@
     d.textContent = text; return d;
   }
 
+  // Probe best-effort HDCP level using EME policy checks (Widevine/PlayReady/WisePlay)
+  async function detectHdcpLevel() {
+    if (!navigator.requestMediaKeySystemAccess) return null;
+    const systems = ['com.widevine.alpha', 'com.microsoft.playready', 'com.huawei.wiseplay'];
+    const versions = ['2.3', '2.2', '2.1', '2.0', '1.4', '1.0'];
+    const base = {
+      initDataTypes: ['cenc', 'keyids'],
+      distinctiveIdentifier: 'not-allowed',
+      persistentState: 'optional',
+      sessionTypes: ['temporary'],
+      videoCapabilities: [{ contentType: 'video/mp4; codecs="avc1.42E01E"' }]
+    };
+
+    for (const ks of systems) {
+      try {
+        const access = await navigator.requestMediaKeySystemAccess(ks, [base]);
+        if (!access) continue;
+        const keys = await access.createMediaKeys();
+        if (!keys || typeof keys.getStatusForPolicy !== 'function') continue;
+
+        for (const ver of versions) {
+          try {
+            const status = await keys.getStatusForPolicy({ minHdcpVersion: ver });
+            if (status === 'usable') {
+              return { system: ks, level: ver, status };
+            }
+          } catch {
+            // Ignore and try the next level
+          }
+        }
+      } catch {
+        // Try next key system
+      }
+    }
+    return null;
+  }
+
   // Suppress known noisy console warnings during MediaCapabilities.decodingInfo
   // without affecting other logs. Filters messages like:
   // - "Failed to parse <audio|video> contentType: ..."
@@ -130,6 +167,7 @@
     const mm = (q) => (typeof window !== 'undefined' && window.matchMedia ? window.matchMedia(q).matches : false);
     const colorGamut = mm('(color-gamut: rec2020)') ? 'Rec.2020' : mm('(color-gamut: p3)') ? 'P3' : (mm('(color-gamut: srgb)') ? 'sRGB' : 'Unknown');
     const hdrSupport = mm('(dynamic-range: high)') || mm('(video-dynamic-range: high)');
+    const hdcp = await detectHdcpLevel();
 
     RESULTS.env = {
       ua,
@@ -145,7 +183,8 @@
       availableScreenResolution: availRes,
       screenFrequency: refresh,
       colorGamut,
-      hdr: hdrSupport
+      hdr: hdrSupport,
+      hdcp: hdcp ? { level: hdcp.level, system: hdcp.system, status: hdcp.status } : null
     };
 
     envEl.innerHTML = '';
@@ -162,6 +201,10 @@
     addKV('Screen Frequency', refresh ? `${refresh} Hz` : 'n/a');
     addKV('Color Gamut', colorGamut);
     addKV('HDR', hdrSupport ? 'Yes' : 'No');
+    const hdcpLabel = hdcp
+      ? (hdcp.level ? `HDCP ${hdcp.level}${hdcp.system ? ` (${hdcp.system})` : ''}` : 'Not available')
+      : 'n/a';
+    addKV('HDCP Level', hdcpLabel);
   }
 
   const VIDEO_TESTS = [
@@ -280,6 +323,7 @@
     { id: 'com.widevine.alpha', label: 'Widevine' },
     { id: 'com.microsoft.playready', label: 'PlayReady' },
     { id: 'org.w3.clearkey', label: 'ClearKey' },
+    { id: 'com.huawei.wiseplay', label: 'WisePlay' },
     { id: 'com.apple.fps.1_0', label: 'FairPlay' },
   ];
 
@@ -288,6 +332,7 @@
     'com.widevine.alpha': ['HW_SECURE_ALL', 'HW_SECURE_DECODE', 'HW_SECURE_CRYPTO', 'SW_SECURE_DECODE', 'SW_SECURE_CRYPTO'],
     'com.microsoft.playready': ['HW_SECURE_DECODE', 'HW_SECURE_CRYPTO', 'SW_SECURE_DECODE', 'SW_SECURE_CRYPTO'],
     'org.w3.clearkey': [''],
+    'com.huawei.wiseplay': ['HW_SECURE_ALL', 'HW_SECURE_DECODE', 'HW_SECURE_CRYPTO', 'SW_SECURE_DECODE', 'SW_SECURE_CRYPTO', ''],
     'com.apple.fps.1_0': ['']
   };
 
