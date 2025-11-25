@@ -27,7 +27,7 @@ Use the build script to package the extension into a distributable ZIP:
 ```
 npm run build
 ```
-The archive is output to `dist/manifest-viewer-extension.zip`, containing the contents of `app/`. Upload this ZIP to the Chrome Web Store, or sideload it via chrome://extensions (Developer Mode → Load unpacked → select `app/` for debugging or drag-and-drop the ZIP for quick tests where supported).
+The archives are output to `dist/manifest-viewer-extension-chrome.zip` and `dist/manifest-viewer-extension-firefox.zip`, containing the contents of `app/`. Upload the Chrome ZIP to the Chrome Web Store, or sideload it via chrome://extensions (Developer Mode → Load unpacked → select `app/` for debugging or drag-and-drop the ZIP for quick tests where supported).
 
 Hosted Viewer & Deep Links
 --------------------------

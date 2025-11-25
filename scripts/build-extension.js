@@ -7,7 +7,7 @@ const archiver = require('archiver');
 const rootDir = path.resolve(__dirname, '..');
 const appDir = path.join(rootDir, 'app');
 const distDir = path.join(rootDir, 'dist');
-const outputName = 'manifest-viewer-extension.zip';
+const outputName = 'manifest-viewer-extension-chrome.zip';
 const outputPath = path.join(distDir, outputName);
 
 if (!fs.existsSync(appDir)) {
@@ -27,7 +27,7 @@ const output = fs.createWriteStream(outputPath);
 const archive = archiver('zip', { zlib: { level: 9 } });
 
 output.on('close', () => {
-  console.log(`Built extension → ${outputPath} (${archive.pointer()} bytes)`);
+  console.log(`Built Chrome package → ${outputPath} (${archive.pointer()} bytes)`);
 });
 
 archive.on('warning', (error) => {
