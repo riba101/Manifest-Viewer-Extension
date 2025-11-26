@@ -16,9 +16,9 @@ function renderFooter(container) {
         >
           <svg
             xmlns="http://www.w3.org/2000/svg"
-            viewBox="0 0 16 16"
-            width="1em"
-            height="1em"
+          viewBox="0 0 16 16"
+          width="22"
+          height="22"
             fill="currentColor"
             aria-hidden="true"
             focusable="false"
@@ -48,29 +48,83 @@ function renderFooter(container) {
 
 function addHostedLink(root) {
   const footerText = root.querySelector('.footer-meta') || root;
-  if (!footerText || document.getElementById('hosted-link')) return;
+  if (!footerText) return;
 
-  try {
-    if (typeof chrome === 'undefined' || !chrome.runtime || typeof chrome.runtime.getManifest !== 'function') {
-      return;
+  const createStoreIcon = (type) => {
+    if (type === 'chrome') {
+      return `<img src="https://developer.chrome.com/static/docs/webstore/branding/image/UV4C4ybeBTsZt43U4xis.png" alt="" aria-hidden="true" style="height: 22px; width: auto;" loading="lazy" />`;
     }
-  } catch {
+    if (type === 'firefox') {
+      return `<img src="https://blog.mozilla.org/addons/files/2020/04/get-the-addon-fx-apr-2020.svg" alt="" aria-hidden="true" style="height: 22px; width: auto;" loading="lazy" />`;
+    }
+    return '';
+  };
+
+  const isExtension = (() => {
+    try {
+      return typeof chrome !== 'undefined' && !!chrome.runtime && typeof chrome.runtime.getManifest === 'function';
+    } catch {
+      return false;
+    }
+  })();
+
+  const addSeparator = () => {
+    const sep = document.createElement('span');
+    sep.textContent = ' | ';
+    sep.style.margin = '0 5px';
+    footerText.appendChild(sep);
+  };
+
+  const createLink = (id, href, label, iconType, showLabel = true) => {
+    const link = document.createElement('a');
+    link.id = id;
+    link.href = href;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    const icon = iconType ? createStoreIcon(iconType) : '';
+    const visibleLabel = showLabel ? label : '';
+    if (icon) {
+      link.innerHTML = `${icon}${visibleLabel}`;
+      link.style.display = 'inline-flex';
+      link.style.alignItems = 'center';
+    } else {
+      link.textContent = visibleLabel;
+    }
+    link.setAttribute('aria-label', label);
+    link.style.color = 'inherit';
+    link.style.textDecoration = 'none';
+    return link;
+  };
+
+  if (isExtension) {
+    if (document.getElementById('hosted-link')) return;
+    addSeparator();
+    footerText.appendChild(createLink('hosted-link', 'https://123-test.stream', 'Open web app'));
     return;
   }
 
-  const sep = document.createElement('span');
-  sep.textContent = ' | ';
-  sep.style.margin = '0 5px';
-  const link = document.createElement('a');
-  link.id = 'hosted-link';
-  link.href = 'https://123-test.stream';
-  link.target = '_blank';
-  link.rel = 'noopener noreferrer';
-  link.textContent = 'Open web app';
-  link.style.color = 'inherit';
-  link.style.textDecoration = 'none';
-  footerText.appendChild(sep);
-  footerText.appendChild(link);
+  if (document.getElementById('chrome-store-link') || document.getElementById('firefox-store-link')) return;
+
+  addSeparator();
+  footerText.appendChild(
+    createLink(
+      'chrome-store-link',
+      'https://chromewebstore.google.com/detail/manifest-viewer-dashhls/dbjifeanbhpnpjplnljacblipoobgccl',
+      'Chrome Web Store',
+      'chrome',
+      false,
+    ),
+  );
+  addSeparator();
+  footerText.appendChild(
+    createLink(
+      'firefox-store-link',
+      'https://addons.mozilla.org/en-US/firefox/addon/manifest-viewer-dash-hls',
+      'Firefox Add-ons',
+      'firefox',
+      false,
+    ),
+  );
 }
 
 function setFooterVersion() {
