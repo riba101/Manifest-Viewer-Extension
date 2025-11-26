@@ -105,26 +105,38 @@ function addHostedLink(root) {
 
   if (document.getElementById('chrome-store-link') || document.getElementById('firefox-store-link')) return;
 
+  const nav = typeof navigator !== 'undefined' ? navigator : null;
+  const ua = (nav && nav.userAgent) || '';
+  const isFirefox = /firefox/i.test(ua);
+  const isChromiumBrand = (() => {
+    const data = nav && nav.userAgentData;
+    if (data && Array.isArray(data.brands)) {
+      return data.brands.some((b) => /chromium|chrome|edge/i.test(b.brand));
+    }
+    return /chrome|crios|chromium|edg/i.test(ua);
+  })();
+
+  let storeLink;
+  if (isFirefox) {
+    storeLink = {
+      id: 'firefox-store-link',
+      href: 'https://addons.mozilla.org/en-US/firefox/addon/manifest-viewer-dash-hls',
+      label: 'Firefox Add-ons',
+      icon: 'firefox',
+    };
+  } else if (isChromiumBrand) {
+    storeLink = {
+      id: 'chrome-store-link',
+      href: 'https://chromewebstore.google.com/detail/manifest-viewer-dashhls/dbjifeanbhpnpjplnljacblipoobgccl',
+      label: 'Chrome Web Store',
+      icon: 'chrome',
+    };
+  }
+
+  if (!storeLink) return;
+
   addSeparator();
-  footerText.appendChild(
-    createLink(
-      'chrome-store-link',
-      'https://chromewebstore.google.com/detail/manifest-viewer-dashhls/dbjifeanbhpnpjplnljacblipoobgccl',
-      'Chrome Web Store',
-      'chrome',
-      false,
-    ),
-  );
-  addSeparator();
-  footerText.appendChild(
-    createLink(
-      'firefox-store-link',
-      'https://addons.mozilla.org/en-US/firefox/addon/manifest-viewer-dash-hls',
-      'Firefox Add-ons',
-      'firefox',
-      false,
-    ),
-  );
+  footerText.appendChild(createLink(storeLink.id, storeLink.href, storeLink.label, storeLink.icon, false));
 }
 
 function setFooterVersion() {
