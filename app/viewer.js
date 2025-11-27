@@ -641,12 +641,54 @@ function isLikelyMp4(url, contentType = '', bytes) {
   return false;
 }
 
+function detectSubtitleFormat(url, bodyText, contentType = '') {
+  const lowerUrl = (url || '').toLowerCase();
+  const ct = (contentType || '').toLowerCase();
+  const trimmed = (bodyText || '').trim();
+  const sanitized = trimmed.charCodeAt(0) === 0xfeff ? trimmed.slice(1) : trimmed;
+  const hasExt = (exts) => exts.some((ext) => new RegExp(`\\.${ext}(?:$|[?#])`).test(lowerUrl));
+
+  const looksLikeVtt =
+    hasExt(['vtt', 'webvtt']) ||
+    ct.includes('text/vtt') ||
+    /^WEBVTT/i.test(sanitized);
+  if (looksLikeVtt) return 'vtt';
+
+  const looksLikeTtml =
+    hasExt(['ttml', 'dfxp', 'tt']) ||
+    ct.includes('ttml') ||
+    ct.includes('timedtext') ||
+    /<tt[:\s>]/i.test(sanitized);
+  if (looksLikeTtml) return 'ttml';
+
+  const looksLikeScc =
+    hasExt(['scc', 'ssc']) ||
+    ct.includes('scenarist') ||
+    /^Scenarist_SCC/i.test(sanitized);
+  if (looksLikeScc) return 'scc';
+
+  const looksLikeSrt =
+    hasExt(['srt']) ||
+    ct.includes('subrip') ||
+    /\d{2}:\d{2}:\d{2}[,.]\d{3}\s*-->\s*\d{2}:\d{2}:\d{2}[,.]\d{3}/.test(sanitized);
+  if (looksLikeSrt) return 'srt';
+
+  const looksLikeSsa =
+    hasExt(['ssa', 'ass', 'sbv']) ||
+    /^\[Script Info\]/i.test(sanitized);
+  if (looksLikeSsa) return 'ssa';
+
+  return null;
+}
+
 function detectMode(url, bodyText, contentType = '') {
   if (modeSelect.value !== 'auto') return modeSelect.value;
   if (isLikelyMp4(url, contentType)) return 'mp4';
   const ct = contentType.toLowerCase();
   const trimmed = bodyText.trim();
   const sanitized = trimmed.charCodeAt(0) === 0xfeff ? trimmed.slice(1) : trimmed;
+  const subtitleFormat = detectSubtitleFormat(url, sanitized, contentType);
+  if (subtitleFormat) return 'subtitles';
   const looksLikeJson =
     /\.json(\b|$)/i.test(url) ||
     ct.includes('application/json') ||
@@ -1614,6 +1656,38 @@ function highlightJSON(text) {
   return out.join('');
 }
 
+function highlightSubtitles(text, baseUrl, format = '') {
+  if (format === 'ttml') return highlightDASH(text, baseUrl);
+  const urlRe = /https?:\/\/[^\s<>"']+/g;
+  const timeRe = /(\d{2}:\d{2}:\d{2}[,.]\d{3}\s*-->\s*\d{2}:\d{2}:\d{2}[,.]\d{3}(?:[^\n]*)?)/;
+
+  return (text || '').split(/\n/).map((line) => {
+    if (!line) return '';
+    let rendered = '';
+    let lastIndex = 0;
+    let match;
+
+    while ((match = urlRe.exec(line)) !== null) {
+      rendered += escapeHTML(line.slice(lastIndex, match.index));
+      const rawUrl = match[0];
+      let href = rawUrl;
+      try { href = new URL(rawUrl, baseUrl).href; } catch {}
+      const safeHref = escapeAttrValue(href);
+      const safeTarget = escapeAttrValue(href);
+      rendered += `<a href="${safeHref}" class="token uri" data-manifest-link="1" data-manifest-target="${safeTarget}">${escapeHTML(rawUrl)}</a>`;
+      lastIndex = match.index + rawUrl.length;
+    }
+
+    rendered += escapeHTML(line.slice(lastIndex));
+
+    if (timeRe.test(line)) {
+      return rendered.replace(timeRe, '<span class="token time">$1</span>');
+    }
+
+    return rendered;
+  }).join('\n');
+}
+
 
 
 async function fetchWithOptionalUA(url, ua) {
@@ -1815,6 +1889,10 @@ function renderLoadedView({ mode, text, buffer, url, meta, validation }) {
   } else if (mode === 'json') {
     codeEl.className = 'language-json';
     codeEl.innerHTML = highlightJSON(text);
+  } else if (mode === 'subtitles') {
+    codeEl.className = 'language-plain';
+    const subtitleFormat = detectSubtitleFormat(url, text, meta?.contentType || '');
+    codeEl.innerHTML = highlightSubtitles(text, url, subtitleFormat);
   } else if (mode === 'mp4' || mode === 'segments') {
     const bufView =
       buffer instanceof Uint8Array

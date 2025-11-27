@@ -434,6 +434,10 @@ code {
 .token.null {
   color: var(--acc2);
 }
+.token.time {
+  color: var(--acc1);
+  font-weight: 600;
+}
 
 footer {
   border-top: 1px solid var(--border);
