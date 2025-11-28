@@ -680,6 +680,10 @@
     return bytes;
   }
 
+  function isGzipBytes(bytes) {
+    return !!(bytes && bytes.length >= 2 && bytes[0] === 0x1f && bytes[1] === 0x8b);
+  }
+
   async function gzipBytes(str) {
     if (typeof CompressionStream !== 'function') return null;
     try {
@@ -732,10 +736,17 @@
 
   async function decodeReport(encoded) {
     if (!encoded) return null;
+    let looksCompressed = false;
     try {
       const bytes = fromBase64Url(encoded);
-      const maybeJsonBytes = await gunzipBytes(bytes);
+      looksCompressed = isGzipBytes(bytes);
+      const maybeJsonBytes = looksCompressed ? await gunzipBytes(bytes) : null;
       const dataBytes = maybeJsonBytes && maybeJsonBytes.length ? maybeJsonBytes : bytes;
+      if (looksCompressed && (!maybeJsonBytes || !maybeJsonBytes.length) && typeof DecompressionStream !== 'function') {
+        const err = new Error('Shared payload is compressed but this browser cannot decompress it.');
+        err.code = 'UNSUPPORTED_GZIP';
+        throw err;
+      }
       let jsonString = '';
       if (typeof TextDecoder !== 'undefined') {
         jsonString = new TextDecoder().decode(dataBytes);
@@ -747,6 +758,7 @@
       }
       return JSON.parse(jsonString);
     } catch (err) {
+      if (err && err.code === 'UNSUPPORTED_GZIP') throw err;
       console.warn('Failed to decode report', err);
       return null;
     }
@@ -781,7 +793,8 @@
       return;
     }
     const report = buildReportPayload({ compact: true });
-    const encoded = await encodeReport(report, { compress: true });
+    // Use uncompressed payloads so shared links render in browsers without CompressionStream/DecompressionStream (e.g., Safari).
+    const encoded = await encodeReport(report, { compress: false });
     if (!encoded) {
       setShareStatus('Unable to build share link.', true);
       return;
@@ -844,7 +857,11 @@
       return { loaded: !!hydrated, hadParam: true };
     } catch (err) {
       console.warn('Failed to load shared report from URL', err);
-      setShareStatus('Could not load shared report from link.', true);
+      if (err && err.code === 'UNSUPPORTED_GZIP') {
+        setShareStatus('Shared link is compressed and cannot be opened in this browser. Copy a new share link (now uncompressed) or open it in a browser with compression support.', true);
+      } else {
+        setShareStatus('Could not load shared report from link.', true);
+      }
       return { loaded: false, hadParam: hadCompatParam };
     }
   }
