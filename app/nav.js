@@ -38,9 +38,14 @@
     });
     navEl.appendChild(linksWrap);
 
-    const spacer = document.createElement('span');
-    spacer.className = 'app-nav__spacer';
-    navEl.appendChild(spacer);
+    const themeBtn = document.createElement('button');
+    themeBtn.type = 'button';
+    themeBtn.id = 'toggleTheme';
+    themeBtn.className = 'app-nav__btn app-nav__theme';
+    themeBtn.title = 'Toggle theme';
+    themeBtn.setAttribute('aria-label', 'Toggle theme');
+    themeBtn.textContent = '☀️/🌙';
+    navEl.appendChild(themeBtn);
 
     return navEl;
   }

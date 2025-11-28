@@ -51,9 +51,13 @@ body {
   position: sticky;
   top: 0;
   z-index: 20;
-  display: flex;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  grid-template-areas:
+    "brand . theme"
+    "links links links";
   align-items: center;
-  gap: 10px;
+  gap: 8px 12px;
   padding: 10px 12px;
   border-bottom: 1px solid var(--border);
   background: var(--panel);
@@ -63,6 +67,7 @@ body {
   font-weight: 700;
   font-size: 14px;
   letter-spacing: 0.03em;
+  grid-area: brand;
 }
 
 .app-nav__links {
@@ -70,6 +75,8 @@ body {
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+  justify-content: flex-start;
+  grid-area: links;
 }
 
 .app-nav__btn {
@@ -94,17 +101,25 @@ body {
   color: var(--text);
 }
 
-.app-nav__spacer {
-  flex: 1;
+.app-nav__theme {
+  align-self: center;
+  grid-area: theme;
+  flex-shrink: 0;
+  height: 28px;
+  padding: 0 10px;
+  font-size: 12px;
 }
 
 @media (max-width: 720px) {
   .app-nav {
-    flex-wrap: wrap;
-    gap: 8px;
+    grid-template-columns: 1fr auto;
+    grid-template-areas:
+      "brand theme"
+      "links links";
+    gap: 8px 10px;
   }
-  .app-nav__brand {
-    width: 100%;
+  .app-nav__theme {
+    margin-top: 0;
   }
 }
 

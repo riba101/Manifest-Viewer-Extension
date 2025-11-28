@@ -87,12 +87,14 @@ function setTheme(theme) {
   setTheme(t || 'dark');
 })();
 
-toggleThemeBtn.addEventListener('click', () => {
-  const html = document.documentElement;
-  const next = html.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
-  setTheme(next);
-  localStorage.setItem('mv_theme', next);
-});
+if (toggleThemeBtn) {
+  toggleThemeBtn.addEventListener('click', () => {
+    const html = document.documentElement;
+    const next = html.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+    setTheme(next);
+    localStorage.setItem('mv_theme', next);
+  });
+}
 
 loadStoredHeaders();
 updateHeadersButtonLabel();
