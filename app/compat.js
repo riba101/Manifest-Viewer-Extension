@@ -4,14 +4,14 @@
   const codecWrap = $('codecTableWrapper');
   const drmWrap = $('drmTableWrapper');
   const runBtn = $('runChecks');
-  const copyBtn = $('copyJson');
-  const copyShareLinkBtn = $('copyShareLink');
+  const downloadBtn = $('downloadJson');
+  const uploadBtn = $('uploadJson');
+  const uploadInput = $('uploadJsonInput');
   const shareStatusEl = $('shareStatus');
   const backBtn = $('back');
   const toggleThemeBtn = $('toggleTheme');
 
   const RESULTS = { env: {}, codecs: [], mse: [], mediaCapabilities: {}, drmMatrix: [] };
-  const HOSTED_COMPAT_URL = 'https://123-test.stream/app/compat.html';
   let manifestVersion = '';
   // Toggle to suppress MediaCapabilities.decodingInfo for all codecs
 
@@ -518,22 +518,11 @@
   }
 
   if (runBtn) runBtn.addEventListener('click', runAll);
-  if (copyBtn) copyBtn.addEventListener('click', async () => {
-    if (!RESULTS || !RESULTS.codecs || !RESULTS.codecs.length) {
-      setShareStatus('Run compatibility checks before copying.', true);
-      return;
-    }
-    try {
-      const report = buildReportPayload();
-      await navigator.clipboard.writeText(JSON.stringify(report, null, 2));
-      copyBtn.textContent = '✓ Copied';
-      setShareStatus('Copied full report JSON.', false);
-      setTimeout(() => (copyBtn.textContent = 'Copy report JSON'), 1200);
-    } catch (e) {
-      alert('Copy failed: ' + (e && e.message ? e.message : String(e)));
-    }
-  });
-  if (copyShareLinkBtn) copyShareLinkBtn.addEventListener('click', handleCopyShareLink);
+  if (downloadBtn) downloadBtn.addEventListener('click', handleDownloadJson);
+  if (uploadBtn && uploadInput) {
+    uploadBtn.addEventListener('click', () => uploadInput.click());
+    uploadInput.addEventListener('change', handleUploadJson);
+  }
   if (backBtn) backBtn.addEventListener('click', () => {
     const isExt = typeof chrome !== 'undefined' && chrome.runtime && typeof chrome.runtime.getURL === 'function';
     const page = isExt ? chrome.runtime.getURL('viewer.html') : (function(){ try { return new URL('viewer.html', window.location.href).href; } catch (e) { return 'viewer.html'; } })();
@@ -1030,32 +1019,63 @@
     shareStatusEl.style.color = isError ? 'var(--error)' : 'var(--muted)';
   }
 
-  async function handleCopyShareLink() {
+  async function handleDownloadJson() {
     if (!RESULTS || !RESULTS.codecs || !RESULTS.codecs.length) {
-      setShareStatus('Run compatibility checks before sharing.', true);
-      return;
-    }
-    const report = buildReportPayload({ compact: true });
-    // Use LZ compression (no browser APIs required) to keep links short and Safari-compatible.
-    const encoded = await encodeReport(report, { format: 'lz' });
-    if (!encoded) {
-      setShareStatus('Unable to build share link.', true);
+      setShareStatus('Run compatibility checks before downloading.', true);
       return;
     }
     try {
-      const url = new URL(HOSTED_COMPAT_URL);
-      url.searchParams.set('compat', encoded);
-      await navigator.clipboard.writeText(url.toString());
-      setShareStatus('Copied share link with embedded report.', false);
-      if (copyShareLinkBtn) {
-        const prev = copyShareLinkBtn.textContent;
-        copyShareLinkBtn.textContent = '✓ Copied';
-        setTimeout(() => (copyShareLinkBtn.textContent = prev), 1200);
-      }
+      const report = buildReportPayload();
+      const blob = new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'manifest-compat-report.json';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      setShareStatus('Downloaded report JSON.', false);
     } catch (err) {
-      alert('Copy failed: ' + (err && err.message ? err.message : String(err)));
+      setShareStatus('Download failed.', true);
     }
   }
+
+  async function handleUploadJson(e) {
+    const file = e && e.target && e.target.files && e.target.files[0];
+    if (!file) return;
+    try {
+      const text = typeof file.text === 'function' ? await file.text() : await new Promise((res, rej) => {
+        const reader = new FileReader();
+        reader.onload = () => res(reader.result);
+        reader.onerror = rej;
+        reader.readAsText(file);
+      });
+      let report = null;
+      try {
+        report = JSON.parse(text);
+      } catch (parseErr) {
+        setShareStatus('Uploaded file is not valid JSON.', true);
+        return;
+      }
+      if (!report || report.schema !== 'mv-compat-v1' || !report.results) {
+        setShareStatus('Uploaded file is not a compatible report.', true);
+        return;
+      }
+      const ok = hydrateFromReport(report);
+      if (ok) {
+        setShareStatus('Loaded report from uploaded file.', false);
+      } else {
+        setShareStatus('Could not load report from file.', true);
+      }
+    } catch (err) {
+      setShareStatus('Failed to read uploaded file.', true);
+    } finally {
+      if (uploadInput) uploadInput.value = '';
+    }
+  }
+
+  // NOTE: Keeping decodeReport/maybeLoadSharedReportFromUrl so old shared links still work, even though new sharing happens via file download/upload.
 
   function hydrateFromReport(report) {
     if (!report || !report.results) return false;
