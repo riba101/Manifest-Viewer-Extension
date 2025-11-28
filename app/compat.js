@@ -5,10 +5,14 @@
   const drmWrap = $('drmTableWrapper');
   const runBtn = $('runChecks');
   const copyBtn = $('copyJson');
+  const copyShareLinkBtn = $('copyShareLink');
+  const shareStatusEl = $('shareStatus');
   const toggleThemeBtn = $('toggleTheme');
   const backBtn = $('backToViewer');
 
   const RESULTS = { env: {}, codecs: [], mse: [], mediaCapabilities: {}, drmMatrix: [] };
+  const HOSTED_COMPAT_URL = 'https://123-test.stream/app/compat.html';
+  let manifestVersion = '';
   // Toggle to suppress MediaCapabilities.decodingInfo for all codecs
 
   async function measureRefreshRate(samples = 12, timeoutMs = 800) {
@@ -64,6 +68,44 @@
     div.appendChild(s);
     div.appendChild(v);
     envEl.appendChild(div);
+  }
+
+  function renderEnvData(env) {
+    if (!envEl) return;
+    envEl.innerHTML = '';
+    const ua = (env && env.ua) || '';
+    const vendor = (env && env.vendor) || '';
+    const platform = (env && env.platform) || '';
+    const lang = (env && env.languages) || '';
+    const mediaCap = !!(env && env.mediaCapabilities);
+    const mse = !!(env && env.mse);
+    const eme = !!(env && env.eme);
+    const hwConcurrency = (env && env.hardwareConcurrency) || 'n/a';
+    const mem = (env && env.deviceMemory) || 'n/a';
+    const res = (env && env.screenResolution) || 'n/a';
+    const availRes = (env && env.availableScreenResolution) || '';
+    const refresh = env && env.screenFrequency;
+    const colorGamut = (env && env.colorGamut) || 'Unknown';
+    const hdrSupport = !!(env && env.hdr);
+    const hdcp = env && env.hdcp;
+
+    addKV('User-Agent', ua);
+    addKV('Vendor', vendor);
+    addKV('Platform', platform);
+    addKV('Languages', lang);
+    addKV('MediaCapabilities API', mediaCap ? 'Yes' : 'No');
+    addKV('MediaSource (MSE)', mse ? 'Yes' : 'No');
+    addKV('Encrypted Media (EME)', eme ? 'Yes' : 'No');
+    addKV('CPU Threads', String(hwConcurrency));
+    addKV('Device Memory (GB)', String(mem));
+    addKV('Screen Resolution', availRes && availRes !== res ? `${res} (avail ${availRes})` : res);
+    addKV('Screen Frequency', refresh ? `${refresh} Hz` : 'n/a');
+    addKV('Color Gamut', colorGamut);
+    addKV('HDR', hdrSupport ? 'Yes' : 'No');
+    const hdcpLabel = hdcp
+      ? (hdcp.level ? `HDCP ${hdcp.level}${hdcp.system ? ` (${hdcp.system})` : ''}` : 'Not available')
+      : 'n/a';
+    addKV('HDCP Level', hdcpLabel);
   }
 
   function pill(ok, label) {
@@ -187,24 +229,7 @@
       hdcp: hdcp ? { level: hdcp.level, system: hdcp.system, status: hdcp.status } : null
     };
 
-    envEl.innerHTML = '';
-    addKV('User-Agent', ua);
-    addKV('Vendor', vendor);
-    addKV('Platform', platform);
-    addKV('Languages', lang);
-    addKV('MediaCapabilities API', mediaCap ? 'Yes' : 'No');
-    addKV('MediaSource (MSE)', mse ? 'Yes' : 'No');
-    addKV('Encrypted Media (EME)', eme ? 'Yes' : 'No');
-    addKV('CPU Threads', String(hwConcurrency));
-    addKV('Device Memory (GB)', String(mem));
-    addKV('Screen Resolution', availRes && availRes !== res ? `${res} (avail ${availRes})` : res);
-    addKV('Screen Frequency', refresh ? `${refresh} Hz` : 'n/a');
-    addKV('Color Gamut', colorGamut);
-    addKV('HDR', hdrSupport ? 'Yes' : 'No');
-    const hdcpLabel = hdcp
-      ? (hdcp.level ? `HDCP ${hdcp.level}${hdcp.system ? ` (${hdcp.system})` : ''}` : 'Not available')
-      : 'n/a';
-    addKV('HDCP Level', hdcpLabel);
+    renderEnvData(RESULTS.env);
   }
 
   const VIDEO_TESTS = [
@@ -233,52 +258,8 @@
     { label: 'AC-4',         contentType: 'audio/mp4; codecs="ac-4"', key: 'ac4' },
   ];
 
-  async function testCodecs() {
-    const v = document.createElement('video');
-    const a = document.createElement('audio');
-    const hasMSE = typeof window.MediaSource !== 'undefined';
-    const mc = navigator.mediaCapabilities;
-
-    const rows = [];
-
-    async function check(entry, kind) {
-      const res = { label: entry.label, contentType: entry.contentType, kind, html: '""', mse: false, mc: null };
-      try {
-        const can = (kind === 'video' ? v.canPlayType(entry.contentType) : a.canPlayType(entry.contentType)) || '';
-        res.html = can; // '', 'maybe', 'probably'
-      } catch {}
-      try {
-        res.mse = hasMSE && MediaSource.isTypeSupported(entry.contentType);
-      } catch { res.mse = false; }
-      try {
-        if (mc && typeof mc.decodingInfo === 'function') {
-          const isVideo = kind === 'video';
-          const cfg = isVideo ? {
-            type: 'file',
-            video: {
-              contentType: entry.contentType,
-              width: 1920, height: 1080, bitrate: 5_000_000, framerate: 30,
-            }
-          } : {
-            type: 'file',
-            audio: {
-              contentType: entry.contentType,
-              channels: 2, bitrate: 128_000, samplerate: 48000,
-            }
-          };
-          const info = await mcDecodingInfoQuiet(mc, cfg);
-          res.mc = { supported: !!info.supported, smooth: !!info.smooth, powerEfficient: !!info.powerEfficient };
-        }
-      } catch { res.mc = null; }
-      rows.push(res);
-    }
-
-    for (const e of VIDEO_TESTS) await check(e, 'video');
-    for (const e of AUDIO_TESTS) await check(e, 'audio');
-
-    RESULTS.codecs = rows;
-
-    // Render
+  function renderCodecsTable(rows) {
+    if (!codecWrap) return;
     const table = document.createElement('table');
     table.className = 'matrix';
     const thead = document.createElement('thead');
@@ -316,6 +297,53 @@
 
     codecWrap.innerHTML = '';
     codecWrap.appendChild(table);
+  }
+
+  async function testCodecs() {
+    const v = document.createElement('video');
+    const a = document.createElement('audio');
+    const hasMSE = typeof window.MediaSource !== 'undefined';
+    const mc = navigator.mediaCapabilities;
+
+    const rows = [];
+
+    async function check(entry, kind) {
+      const res = { key: entry.key, label: entry.label, contentType: entry.contentType, kind, html: '""', mse: false, mc: null };
+      try {
+        const can = (kind === 'video' ? v.canPlayType(entry.contentType) : a.canPlayType(entry.contentType)) || '';
+        res.html = can; // '', 'maybe', 'probably'
+      } catch {}
+      try {
+        res.mse = hasMSE && MediaSource.isTypeSupported(entry.contentType);
+      } catch { res.mse = false; }
+      try {
+        if (mc && typeof mc.decodingInfo === 'function') {
+          const isVideo = kind === 'video';
+          const cfg = isVideo ? {
+            type: 'file',
+            video: {
+              contentType: entry.contentType,
+              width: 1920, height: 1080, bitrate: 5_000_000, framerate: 30,
+            }
+          } : {
+            type: 'file',
+            audio: {
+              contentType: entry.contentType,
+              channels: 2, bitrate: 128_000, samplerate: 48000,
+            }
+          };
+          const info = await mcDecodingInfoQuiet(mc, cfg);
+          res.mc = { supported: !!info.supported, smooth: !!info.smooth, powerEfficient: !!info.powerEfficient };
+        }
+      } catch { res.mc = null; }
+      rows.push(res);
+    }
+
+    for (const e of VIDEO_TESTS) await check(e, 'video');
+    for (const e of AUDIO_TESTS) await check(e, 'audio');
+
+    RESULTS.codecs = rows;
+    renderCodecsTable(rows);
   }
 
   // DRM matrix
@@ -462,6 +490,7 @@
   }
 
   async function runAll() {
+    setShareStatus('');
     // version
     const versionEl = document.getElementById('viewer-version');
     const versionSection = document.getElementById('version-section');
@@ -471,6 +500,7 @@
         const manifest = chrome.runtime.getManifest();
         const v = manifest && typeof manifest.version === 'string' ? manifest.version.trim() : '';
         if (v) {
+          manifestVersion = v;
           versionEl.textContent = v;
           if (versionSection) versionSection.style.display = '';
         } else {
@@ -489,14 +519,21 @@
 
   if (runBtn) runBtn.addEventListener('click', runAll);
   if (copyBtn) copyBtn.addEventListener('click', async () => {
+    if (!RESULTS || !RESULTS.codecs || !RESULTS.codecs.length) {
+      setShareStatus('Run compatibility checks before copying.', true);
+      return;
+    }
     try {
-      await navigator.clipboard.writeText(JSON.stringify(RESULTS, null, 2));
+      const report = buildReportPayload();
+      await navigator.clipboard.writeText(JSON.stringify(report, null, 2));
       copyBtn.textContent = '✓ Copied';
-      setTimeout(() => (copyBtn.textContent = 'Copy JSON'), 1200);
+      setShareStatus('Copied full report JSON.', false);
+      setTimeout(() => (copyBtn.textContent = 'Copy report JSON'), 1200);
     } catch (e) {
       alert('Copy failed: ' + (e && e.message ? e.message : String(e)));
     }
   });
+  if (copyShareLinkBtn) copyShareLinkBtn.addEventListener('click', handleCopyShareLink);
   if (backBtn) backBtn.addEventListener('click', () => {
     const isExt = typeof chrome !== 'undefined' && chrome.runtime && typeof chrome.runtime.getURL === 'function';
     const page = isExt ? chrome.runtime.getURL('viewer.html') : (function(){ try { return new URL('viewer.html', window.location.href).href; } catch (e) { return 'viewer.html'; } })();
@@ -600,6 +637,139 @@
   }
   if (typeof window !== 'undefined') {
     window.addEventListener('resize', () => renderDRM());
+  }
+
+  function cloneResults() {
+    try {
+      return JSON.parse(JSON.stringify(RESULTS));
+    } catch {
+      return { env: {}, codecs: [], mse: [], mediaCapabilities: {}, drmMatrix: [] };
+    }
+  }
+
+  function encodeReport(report) {
+    try {
+      const json = JSON.stringify(report);
+      if (typeof TextEncoder !== 'undefined') {
+        const bytes = new TextEncoder().encode(json);
+        let binary = '';
+        bytes.forEach((b) => { binary += String.fromCharCode(b); });
+        return btoa(binary);
+      }
+      return btoa(unescape(encodeURIComponent(json)));
+    } catch (err) {
+      console.error('Failed to encode report', err);
+      return '';
+    }
+  }
+
+  function decodeReport(encoded) {
+    try {
+      const binary = atob(encoded);
+      let jsonString = '';
+      if (typeof TextDecoder !== 'undefined') {
+        const bytes = Uint8Array.from(binary, (c) => c.charCodeAt(0));
+        jsonString = new TextDecoder().decode(bytes);
+      } else {
+        jsonString = decodeURIComponent(Array.prototype.map.call(binary, (ch) => {
+          const hex = ch.charCodeAt(0).toString(16).padStart(2, '0');
+          return `%${hex}`;
+        }).join(''));
+      }
+      return JSON.parse(jsonString);
+    } catch (err) {
+      console.warn('Failed to decode report', err);
+      return null;
+    }
+  }
+
+  function buildReportPayload() {
+    const snapshot = cloneResults();
+    return {
+      schema: 'mv-compat-v1',
+      generatedAt: new Date().toISOString(),
+      version: manifestVersion || null,
+      preset: null,
+      results: snapshot,
+      userAgent: (navigator && navigator.userAgent) || ''
+    };
+  }
+
+  function setShareStatus(msg, isError) {
+    if (!shareStatusEl) return;
+    const text = msg || '';
+    shareStatusEl.textContent = text;
+    shareStatusEl.style.display = text ? '' : 'none';
+    shareStatusEl.style.color = isError ? 'var(--error)' : 'var(--muted)';
+  }
+
+  async function handleCopyShareLink() {
+    if (!RESULTS || !RESULTS.codecs || !RESULTS.codecs.length) {
+      setShareStatus('Run compatibility checks before sharing.', true);
+      return;
+    }
+    const report = buildReportPayload();
+    const encoded = encodeReport(report);
+    if (!encoded) {
+      setShareStatus('Unable to build share link.', true);
+      return;
+    }
+    try {
+      const url = new URL(HOSTED_COMPAT_URL);
+      url.searchParams.set('compat', encoded);
+      await navigator.clipboard.writeText(url.toString());
+      setShareStatus('Copied share link with embedded report.', false);
+      if (copyShareLinkBtn) {
+        const prev = copyShareLinkBtn.textContent;
+        copyShareLinkBtn.textContent = '✓ Copied';
+        setTimeout(() => (copyShareLinkBtn.textContent = prev), 1200);
+      }
+    } catch (err) {
+      alert('Copy failed: ' + (err && err.message ? err.message : String(err)));
+    }
+  }
+
+  function hydrateFromReport(report) {
+    if (!report || !report.results) return false;
+    RESULTS.env = report.results.env || {};
+    RESULTS.codecs = report.results.codecs || [];
+    RESULTS.mse = report.results.mse || [];
+    RESULTS.mediaCapabilities = report.results.mediaCapabilities || {};
+    RESULTS.drmMatrix = report.results.drmMatrix || [];
+    manifestVersion = report.version || manifestVersion;
+    if (manifestVersion) {
+      const versionEl = document.getElementById('viewer-version');
+      const versionSection = document.getElementById('version-section');
+      if (versionEl) {
+        versionEl.textContent = manifestVersion;
+        if (versionSection) versionSection.style.display = '';
+      }
+    }
+    renderEnvData(RESULTS.env);
+    renderCodecsTable(RESULTS.codecs || []);
+    drmState = { matrix: RESULTS.drmMatrix || [], hasEME: !!(RESULTS.env && RESULTS.env.eme) };
+    renderDRM();
+    setShareStatus(report.generatedAt ? `Loaded shared report from ${report.generatedAt}.` : 'Loaded shared report.', false);
+    return true;
+  }
+
+  function maybeLoadSharedReportFromUrl() {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const encoded = params.get('compat');
+      if (!encoded) return false;
+      const report = decodeReport(encoded);
+      if (!report || report.schema !== 'mv-compat-v1') {
+        setShareStatus('Shared report is invalid or uses an unknown schema.', true);
+        return false;
+      }
+      const hydrated = hydrateFromReport(report);
+      return !!hydrated;
+    } catch (err) {
+      console.warn('Failed to load shared report from URL', err);
+      setShareStatus('Could not load shared report from link.', true);
+      return false;
+    }
   }
 
   // Normalize user input: accept either full contentType or just a codec string
@@ -803,6 +973,12 @@
     });
   }
 
-  // autorun
-  runAll();
+  async function init() {
+    const loaded = maybeLoadSharedReportFromUrl();
+    if (!loaded) {
+      await runAll();
+    }
+  }
+
+  init();
 })();
