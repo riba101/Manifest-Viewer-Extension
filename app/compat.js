@@ -684,6 +684,218 @@
     return !!(bytes && bytes.length >= 2 && bytes[0] === 0x1f && bytes[1] === 0x8b);
   }
 
+  function textToBytes(str) {
+    if (typeof TextEncoder !== 'undefined') return new TextEncoder().encode(str);
+    const escaped = unescape(encodeURIComponent(str));
+    const arr = new Uint8Array(escaped.length);
+    for (let i = 0; i < escaped.length; i += 1) arr[i] = escaped.charCodeAt(i);
+    return arr;
+  }
+
+  // Lightweight LZ-based compression (MIT, adapted from pieroxy/lz-string)
+  // Keeps share links short without relying on browser CompressionStream support.
+  function lzCompress(uncompressed) {
+    if (uncompressed == null) return '';
+    let i;
+    const dictionary = new Map();
+    const dictionaryToCreate = new Map();
+    let c;
+    let w = '';
+    let enlargeIn = 2;
+    let dictSize = 3;
+    let numBits = 2;
+    const data = [];
+    let data_val = 0;
+    let data_position = 0;
+
+    const pushBit = (bit) => {
+      data_val = (data_val << 1) | bit;
+      if (data_position === 15) {
+        data.push(data_val);
+        data_position = 0;
+        data_val = 0;
+      } else {
+        data_position += 1;
+      }
+    };
+
+    const pushBits = (value, bits) => {
+      for (let j = 0; j < bits; j += 1) {
+        pushBit(value & 1);
+        value >>= 1;
+      }
+    };
+
+    for (i = 0; i < uncompressed.length; i += 1) {
+      c = uncompressed.charAt(i);
+      if (!dictionary.has(c)) {
+        dictionary.set(c, dictSize);
+        dictSize += 1;
+        dictionaryToCreate.set(c, true);
+      }
+      const wc = w + c;
+      if (dictionary.has(wc)) {
+        w = wc;
+        continue;
+      }
+
+      if (dictionaryToCreate.has(w)) {
+        const value = w.charCodeAt(0);
+        if (value < 256) {
+          pushBits(0, numBits);
+          pushBits(value, 8);
+        } else {
+          pushBits(1, numBits);
+          pushBits(value, 16);
+        }
+        dictionaryToCreate.delete(w);
+      } else {
+        pushBits(dictionary.get(w), numBits);
+      }
+
+      enlargeIn -= 1;
+      if (enlargeIn === 0) {
+        enlargeIn = 2 ** numBits;
+        numBits += 1;
+      }
+      dictionary.set(wc, dictSize);
+      dictSize += 1;
+      w = c;
+    }
+
+    if (w !== '') {
+      if (dictionaryToCreate.has(w)) {
+        const value = w.charCodeAt(0);
+        if (value < 256) {
+          pushBits(0, numBits);
+          pushBits(value, 8);
+        } else {
+          pushBits(1, numBits);
+          pushBits(value, 16);
+        }
+        dictionaryToCreate.delete(w);
+      } else {
+        pushBits(dictionary.get(w), numBits);
+      }
+      enlargeIn -= 1;
+    }
+
+    pushBits(2, numBits);
+    while (true) {
+      data_val <<= 1;
+      if (data_position === 15) {
+        data.push(data_val);
+        break;
+      }
+      data_position += 1;
+    }
+    return String.fromCharCode(...data);
+  }
+
+  function lzDecompress(compressed) {
+    if (compressed == null) return '';
+    let dictionary = [0, 1, 2];
+    let next; let enlargeIn = 4; let dictSize = 4; let numBits = 3;
+    let entry = ''; const result = [];
+    let w; let bits; let resb; let maxpower; let power;
+    const data = { val: compressed.charCodeAt(0), position: 32768, index: 1 };
+
+    const readBits = (bitsCount) => {
+      let value = 0;
+      maxpower = 2 ** bitsCount;
+      power = 1;
+      while (power !== maxpower) {
+        resb = data.val & data.position;
+        data.position >>= 1;
+        if (data.position === 0) {
+          data.position = 32768;
+          data.val = compressed.charCodeAt(data.index);
+          data.index += 1;
+        }
+        value |= (resb > 0 ? 1 : 0) * power;
+        power <<= 1;
+      }
+      return value;
+    };
+
+    const bitsType = readBits(2);
+    switch (bitsType) {
+      case 0: next = String.fromCharCode(readBits(8)); break;
+      case 1: next = String.fromCharCode(readBits(16)); break;
+      case 2: return '';
+      default: return '';
+    }
+
+    dictionary[3] = next;
+    w = next;
+    result.push(next);
+
+    while (true) {
+      if (data.index > compressed.length) return '';
+      const cc = readBits(numBits);
+      let c;
+      if (cc === 0) {
+        dictionary[dictSize] = String.fromCharCode(readBits(8));
+        c = dictSize;
+        dictSize += 1;
+        enlargeIn -= 1;
+      } else if (cc === 1) {
+        dictionary[dictSize] = String.fromCharCode(readBits(16));
+        c = dictSize;
+        dictSize += 1;
+        enlargeIn -= 1;
+      } else if (cc === 2) {
+        return result.join('');
+      } else {
+        c = cc;
+      }
+
+      if (enlargeIn === 0) {
+        enlargeIn = 2 ** numBits;
+        numBits += 1;
+      }
+
+      let str;
+      if (dictionary[c]) {
+        str = dictionary[c];
+      } else {
+        if (c !== dictSize) return '';
+        str = w + w.charAt(0);
+      }
+      result.push(str);
+      dictionary[dictSize] = w + str.charAt(0);
+      dictSize += 1;
+      enlargeIn -= 1;
+      w = str;
+
+      if (enlargeIn === 0) {
+        enlargeIn = 2 ** numBits;
+        numBits += 1;
+      }
+    }
+  }
+
+  function lzCompressToUint8Array(input) {
+    const compressed = lzCompress(input);
+    const buf = new Uint8Array(compressed.length * 2);
+    for (let i = 0; i < compressed.length; i += 1) {
+      const current = compressed.charCodeAt(i);
+      buf[i * 2] = current >> 8;
+      buf[i * 2 + 1] = current & 0xff;
+    }
+    return buf;
+  }
+
+  function lzDecompressFromUint8Array(input) {
+    if (!input || input.length % 2 !== 0) return '';
+    const length = input.length / 2;
+    const str = [];
+    for (let i = 0; i < length; i += 1) {
+      str[i] = String.fromCharCode((input[i * 2] << 8) | input[i * 2 + 1]);
+    }
+    return lzDecompress(str.join(''));
+  }
+
   async function gzipBytes(str) {
     if (typeof CompressionStream !== 'function') return null;
     try {
@@ -715,19 +927,33 @@
   async function encodeReport(report, options = {}) {
     try {
       const json = JSON.stringify(report);
-      const stringToBytes = (str) => {
-        if (typeof TextEncoder !== 'undefined') return new TextEncoder().encode(str);
-        const escaped = unescape(encodeURIComponent(str));
-        const arr = new Uint8Array(escaped.length);
-        for (let i = 0; i < escaped.length; i += 1) arr[i] = escaped.charCodeAt(i);
-        return arr;
-      };
-      const bytes = stringToBytes(json);
-      if (options.compress === true) {
+      const preference = options.format || (options.compress === false ? 'plain' : 'auto'); // auto -> gzip if available, else LZ
+      const preferPlain = preference === 'plain';
+      let chosenFormat = 'plain';
+      let bytes = null;
+
+      if (!preferPlain) {
         const gz = await gzipBytes(json);
-        if (gz && gz.length) return toBase64Url(gz);
+        if (gz && gz.length) {
+          chosenFormat = 'gz';
+          bytes = gz;
+        }
       }
-      return toBase64Url(bytes);
+
+      if (!bytes && !preferPlain) {
+        const lz = lzCompressToUint8Array(json);
+        if (lz && lz.length) {
+          chosenFormat = 'lz';
+          bytes = lz;
+        }
+      }
+
+      if (!bytes) {
+        chosenFormat = 'plain';
+        bytes = textToBytes(json);
+      }
+
+      return `${chosenFormat}:${toBase64Url(bytes)}`;
     } catch (err) {
       console.error('Failed to encode report', err);
       return '';
@@ -736,26 +962,43 @@
 
   async function decodeReport(encoded) {
     if (!encoded) return null;
-    let looksCompressed = false;
+    let format = 'plain';
+    let payload = encoded.trim();
+    const sep = payload.indexOf(':');
+    if (sep > 0 && sep < 8) {
+      format = payload.slice(0, sep);
+      payload = payload.slice(sep + 1);
+    }
     try {
-      const bytes = fromBase64Url(encoded);
-      looksCompressed = isGzipBytes(bytes);
-      const maybeJsonBytes = looksCompressed ? await gunzipBytes(bytes) : null;
-      const dataBytes = maybeJsonBytes && maybeJsonBytes.length ? maybeJsonBytes : bytes;
-      if (looksCompressed && (!maybeJsonBytes || !maybeJsonBytes.length) && typeof DecompressionStream !== 'function') {
-        const err = new Error('Shared payload is compressed but this browser cannot decompress it.');
-        err.code = 'UNSUPPORTED_GZIP';
-        throw err;
-      }
+      const bytes = fromBase64Url(payload);
       let jsonString = '';
-      if (typeof TextDecoder !== 'undefined') {
-        jsonString = new TextDecoder().decode(dataBytes);
+
+      if (format === 'lz') {
+        jsonString = lzDecompressFromUint8Array(bytes) || '';
       } else {
-        jsonString = decodeURIComponent(Array.prototype.map.call(dataBytes, (ch) => {
-          const hex = ch.toString(16).padStart(2, '0');
-          return `%${hex}`;
-        }).join(''));
+        const shouldTryGunzip = format === 'gz' || (format === 'plain' && isGzipBytes(bytes));
+        let dataBytes = bytes;
+        if (shouldTryGunzip) {
+          const maybeJsonBytes = await gunzipBytes(bytes);
+          if (maybeJsonBytes && maybeJsonBytes.length) {
+            dataBytes = maybeJsonBytes;
+          } else if (format === 'gz') {
+            const err = new Error('Shared payload is compressed but this browser cannot decompress it.');
+            err.code = 'UNSUPPORTED_GZIP';
+            throw err;
+          }
+        }
+        if (typeof TextDecoder !== 'undefined') {
+          jsonString = new TextDecoder().decode(dataBytes);
+        } else {
+          jsonString = decodeURIComponent(Array.prototype.map.call(dataBytes, (ch) => {
+            const hex = ch.toString(16).padStart(2, '0');
+            return `%${hex}`;
+          }).join(''));
+        }
       }
+
+      if (!jsonString) return null;
       return JSON.parse(jsonString);
     } catch (err) {
       if (err && err.code === 'UNSUPPORTED_GZIP') throw err;
@@ -793,8 +1036,8 @@
       return;
     }
     const report = buildReportPayload({ compact: true });
-    // Use uncompressed payloads so shared links render in browsers without CompressionStream/DecompressionStream (e.g., Safari).
-    const encoded = await encodeReport(report, { compress: false });
+    // Use LZ compression (no browser APIs required) to keep links short and Safari-compatible.
+    const encoded = await encodeReport(report, { format: 'lz' });
     if (!encoded) {
       setShareStatus('Unable to build share link.', true);
       return;
