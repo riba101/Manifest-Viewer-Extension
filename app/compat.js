@@ -653,12 +653,6 @@
     });
   }
 
-  // Base64 helpers (URL-safe)
-  function toBase64Url(bytes) {
-    let binary = '';
-    bytes.forEach((b) => { binary += String.fromCharCode(b); });
-    return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
-  }
   function fromBase64Url(encoded) {
     let normalized = encoded.trim().replace(/-/g, '+').replace(/_/g, '/');
     const padding = normalized.length % 4 === 0 ? 0 : 4 - (normalized.length % 4);
@@ -673,120 +667,12 @@
     return !!(bytes && bytes.length >= 2 && bytes[0] === 0x1f && bytes[1] === 0x8b);
   }
 
-  function textToBytes(str) {
-    if (typeof TextEncoder !== 'undefined') return new TextEncoder().encode(str);
-    const escaped = unescape(encodeURIComponent(str));
-    const arr = new Uint8Array(escaped.length);
-    for (let i = 0; i < escaped.length; i += 1) arr[i] = escaped.charCodeAt(i);
-    return arr;
-  }
-
-  // Lightweight LZ-based compression (MIT, adapted from pieroxy/lz-string)
-  // Keeps share links short without relying on browser CompressionStream support.
-  function lzCompress(uncompressed) {
-    if (uncompressed == null) return '';
-    let i;
-    const dictionary = new Map();
-    const dictionaryToCreate = new Map();
-    let c;
-    let w = '';
-    let enlargeIn = 2;
-    let dictSize = 3;
-    let numBits = 2;
-    const data = [];
-    let data_val = 0;
-    let data_position = 0;
-
-    const pushBit = (bit) => {
-      data_val = (data_val << 1) | bit;
-      if (data_position === 15) {
-        data.push(data_val);
-        data_position = 0;
-        data_val = 0;
-      } else {
-        data_position += 1;
-      }
-    };
-
-    const pushBits = (value, bits) => {
-      for (let j = 0; j < bits; j += 1) {
-        pushBit(value & 1);
-        value >>= 1;
-      }
-    };
-
-    for (i = 0; i < uncompressed.length; i += 1) {
-      c = uncompressed.charAt(i);
-      if (!dictionary.has(c)) {
-        dictionary.set(c, dictSize);
-        dictSize += 1;
-        dictionaryToCreate.set(c, true);
-      }
-      const wc = w + c;
-      if (dictionary.has(wc)) {
-        w = wc;
-        continue;
-      }
-
-      if (dictionaryToCreate.has(w)) {
-        const value = w.charCodeAt(0);
-        if (value < 256) {
-          pushBits(0, numBits);
-          pushBits(value, 8);
-        } else {
-          pushBits(1, numBits);
-          pushBits(value, 16);
-        }
-        dictionaryToCreate.delete(w);
-      } else {
-        pushBits(dictionary.get(w), numBits);
-      }
-
-      enlargeIn -= 1;
-      if (enlargeIn === 0) {
-        enlargeIn = 2 ** numBits;
-        numBits += 1;
-      }
-      dictionary.set(wc, dictSize);
-      dictSize += 1;
-      w = c;
-    }
-
-    if (w !== '') {
-      if (dictionaryToCreate.has(w)) {
-        const value = w.charCodeAt(0);
-        if (value < 256) {
-          pushBits(0, numBits);
-          pushBits(value, 8);
-        } else {
-          pushBits(1, numBits);
-          pushBits(value, 16);
-        }
-        dictionaryToCreate.delete(w);
-      } else {
-        pushBits(dictionary.get(w), numBits);
-      }
-      enlargeIn -= 1;
-    }
-
-    pushBits(2, numBits);
-    while (true) {
-      data_val <<= 1;
-      if (data_position === 15) {
-        data.push(data_val);
-        break;
-      }
-      data_position += 1;
-    }
-    return String.fromCharCode(...data);
-  }
-
   function lzDecompress(compressed) {
     if (compressed == null) return '';
     let dictionary = [0, 1, 2];
     let next; let enlargeIn = 4; let dictSize = 4; let numBits = 3;
-    let entry = ''; const result = [];
-    let w; let bits; let resb; let maxpower; let power;
+    const result = [];
+    let w; let resb; let maxpower; let power;
     const data = { val: compressed.charCodeAt(0), position: 32768, index: 1 };
 
     const readBits = (bitsCount) => {
@@ -819,6 +705,7 @@
     w = next;
     result.push(next);
 
+    // eslint-disable-next-line no-constant-condition
     while (true) {
       if (data.index > compressed.length) return '';
       const cc = readBits(numBits);
@@ -864,17 +751,6 @@
     }
   }
 
-  function lzCompressToUint8Array(input) {
-    const compressed = lzCompress(input);
-    const buf = new Uint8Array(compressed.length * 2);
-    for (let i = 0; i < compressed.length; i += 1) {
-      const current = compressed.charCodeAt(i);
-      buf[i * 2] = current >> 8;
-      buf[i * 2 + 1] = current & 0xff;
-    }
-    return buf;
-  }
-
   function lzDecompressFromUint8Array(input) {
     if (!input || input.length % 2 !== 0) return '';
     const length = input.length / 2;
@@ -883,21 +759,6 @@
       str[i] = String.fromCharCode((input[i * 2] << 8) | input[i * 2 + 1]);
     }
     return lzDecompress(str.join(''));
-  }
-
-  async function gzipBytes(str) {
-    if (typeof CompressionStream !== 'function') return null;
-    try {
-      const cs = new CompressionStream('gzip');
-      const writer = cs.writable.getWriter();
-      writer.write(new TextEncoder().encode(str));
-      writer.close();
-      const resp = new Response(cs.readable);
-      const buf = await resp.arrayBuffer();
-      return new Uint8Array(buf);
-    } catch {
-      return null;
-    }
   }
 
   async function gunzipBytes(bytes) {
@@ -910,42 +771,6 @@
       return new Uint8Array(buf);
     } catch {
       return null;
-    }
-  }
-
-  async function encodeReport(report, options = {}) {
-    try {
-      const json = JSON.stringify(report);
-      const preference = options.format || (options.compress === false ? 'plain' : 'auto'); // auto -> gzip if available, else LZ
-      const preferPlain = preference === 'plain';
-      let chosenFormat = 'plain';
-      let bytes = null;
-
-      if (!preferPlain) {
-        const gz = await gzipBytes(json);
-        if (gz && gz.length) {
-          chosenFormat = 'gz';
-          bytes = gz;
-        }
-      }
-
-      if (!bytes && !preferPlain) {
-        const lz = lzCompressToUint8Array(json);
-        if (lz && lz.length) {
-          chosenFormat = 'lz';
-          bytes = lz;
-        }
-      }
-
-      if (!bytes) {
-        chosenFormat = 'plain';
-        bytes = textToBytes(json);
-      }
-
-      return `${chosenFormat}:${toBase64Url(bytes)}`;
-    } catch (err) {
-      console.error('Failed to encode report', err);
-      return '';
     }
   }
 
@@ -1331,7 +1156,7 @@
   }
 
   async function init() {
-    const { loaded, hadParam } = await maybeLoadSharedReportFromUrl();
+    const { loaded } = await maybeLoadSharedReportFromUrl();
     if (!loaded) {
       await runAll();
     }

@@ -116,12 +116,16 @@ function isDuringExtendedStartup() {
 
 // Absolute safety net: fully disable startup gating after the window elapses,
 // even if something prevented our normal cleanup from running.
-setTimeout(() => {
+const startupSafetyTimer = setTimeout(() => {
   if (isDuringExtendedStartup()) return;
   isStartup = false;
   startupCaptureUntil = 0;
   persistStartupState();
 }, STARTUP_NEW_TAB_CAPTURE_MS + 10000);
+// In Node/Jest this timer keeps the process alive; allow unref when available.
+if (startupSafetyTimer && typeof startupSafetyTimer === "object" && typeof startupSafetyTimer.unref === "function") {
+  startupSafetyTimer.unref();
+}
 
 // Skip auto-open during the startup window for restored tabs, but do not block
 // user-initiated navigations forever. Once the user navigates intentionally or

@@ -430,7 +430,7 @@
     return out;
   }
 
-  function parseDashManifest(text, url) {
+  function parseDashManifest(text) {
     let doc = null;
     try {
       doc = new DOMParser().parseFromString(text, 'application/xml');
@@ -510,7 +510,7 @@
     const sanitizedText = stripBom(source.text);
     const mode = resolveMode(source, sanitizedText);
     if (mode === 'hls') return { ...parseHlsManifest(sanitizedText, source.url || ''), url: source.url };
-    if (mode === 'dash') return { ...parseDashManifest(sanitizedText, source.url || ''), url: source.url };
+    if (mode === 'dash') return { ...parseDashManifest(sanitizedText), url: source.url };
     return {
       mode,
       variants: [],

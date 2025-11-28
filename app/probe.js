@@ -10,8 +10,6 @@
   const timelineZoomInput = $('timelineZoom');
   const timelineZoomValue = $('timelineZoomValue');
   const toggleThemeBtn = $('toggleTheme');
-
-  const entityDecoder = document.createElement('textarea');
   let timelineZoom = 0;
   let lastTimelineSegments = null;
   let lastTimelineMeta = null;
@@ -50,33 +48,18 @@
     if (lastTimelineSegments) renderTimeline(lastTimelineSegments, lastTimelineMeta);
   }
 
-  function escapeHTML(s) {
-    return String(s || '').replace(/[&<>"']/g, (c) => ({
-      '&': '&amp;',
-      '<': '&lt;',
-      '>': '&gt;',
-      '"': '&quot;',
-      "'": '&#39;',
-    })[c]);
-  }
-
-  function decodeHTML(s) {
-    entityDecoder.innerHTML = s;
-    return entityDecoder.value;
-  }
-
   function detectMode(url, bodyText, contentType = '') {
     const ct = (contentType || '').toLowerCase();
     const trimmed = (bodyText || '').trim();
     const sanitized = trimmed.charCodeAt(0) === 0xfeff ? trimmed.slice(1) : trimmed;
-    if (/\.mpd(\b|$)/i.test(url) || /dash|mpd/.test(ct) || /^<\?xml/.test(trimmed) || /^<MPD/i.test(trimmed)) {
+    if (/\.mpd(\b|$)/i.test(url) || /dash|mpd/.test(ct) || /^<\?xml/.test(sanitized) || /^<MPD/i.test(sanitized)) {
       return 'dash';
     }
-    if (/\.m3u8(\b|$)/i.test(url) || /application\/vnd\.apple\.mpegurl|application\/x-mpegurl/.test(ct) || /^#EXTM3U/i.test(trimmed)) {
+    if (/\.m3u8(\b|$)/i.test(url) || /application\/vnd\.apple\.mpegurl|application\/x-mpegurl/.test(ct) || /^#EXTM3U/i.test(sanitized)) {
       return 'hls';
     }
     if (/json/.test(ct)) return 'json';
-    if (/^(\{|\[)/.test(trimmed)) return 'json';
+    if (/^(\{|\[)/.test(sanitized)) return 'json';
     return 'plain';
   }
 
@@ -344,17 +327,6 @@
     const mpd = doc.documentElement;
     const periods = collectElementsByLocalName(mpd, 'Period');
 
-    const getDurationSeconds = (attr) => {
-      if (!attr) return null;
-      // PT#H#M#S
-      const match = /PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?/i.exec(attr);
-      if (!match) return null;
-      const hours = Number(match[1] || 0);
-      const mins = Number(match[2] || 0);
-      const secs = Number(match[3] || 0);
-      return hours * 3600 + mins * 60 + secs;
-    };
-
     let trackOrderCounter = 0;
     let cdnOrderCounter = 0;
 
@@ -366,7 +338,6 @@
           // Use SegmentTemplate timeline
           const tmpl = collectElementsByLocalName(rep, 'SegmentTemplate')[0] || collectElementsByLocalName(as, 'SegmentTemplate')[0];
           const listEl = collectElementsByLocalName(rep, 'SegmentList')[0] || collectElementsByLocalName(as, 'SegmentList')[0];
-          const base = url;
           const repId = rep.getAttribute('id') || `rep-${pIdx}-${segments.length}`;
           const trackLabelParts = [];
           const bw = rep.getAttribute('bandwidth');
@@ -838,16 +809,6 @@ function renderTimeline(segments, meta) {
     timelineZoomInput.addEventListener('input', (e) => setZoom(e.target.value));
     setZoom(timelineZoomInput.value || 0);
   }
-
-  if (backBtn) backBtn.addEventListener('click', () => {
-    const isExt = typeof chrome !== 'undefined' && chrome.runtime && typeof chrome.runtime.getURL === 'function';
-    const page = isExt ? chrome.runtime.getURL('viewer.html') : 'viewer.html';
-    try {
-      window.location.href = page;
-    } catch (e) {
-      try { window.open(page, '_self'); } catch {}
-    }
-  });
 
   (function restoreFromViewer() {
     try {
