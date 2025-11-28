@@ -12,14 +12,106 @@ const startupTabs = new Set();
 
 const STARTUP_NEW_TAB_CAPTURE_MS = 30000;
 let startupCaptureUntil = 0;
+let restoredStartupState = false;
+const STARTUP_STATE_KEY = "mv_startup_state_v1";
+
+function getStartupStorageArea() {
+  try {
+    if (chrome?.storage?.session) return chrome.storage.session;
+    if (chrome?.storage?.local) return chrome.storage.local;
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
+function readStartupState(defaultValue = null) {
+  return new Promise((resolve) => {
+    const area = getStartupStorageArea();
+    if (!area || typeof area.get !== "function") {
+      resolve(defaultValue);
+      return;
+    }
+    try {
+      area.get({ [STARTUP_STATE_KEY]: defaultValue }, (res) => {
+        try {
+          resolve(res ? res[STARTUP_STATE_KEY] : defaultValue);
+        } catch {
+          resolve(defaultValue);
+        }
+      });
+    } catch {
+      resolve(defaultValue);
+    }
+  });
+}
+
+function writeStartupState(payload) {
+  const area = getStartupStorageArea();
+  if (!area) return;
+  try {
+    if (!payload || typeof area.set !== "function") {
+      if (typeof area.remove === "function") area.remove(STARTUP_STATE_KEY);
+      return;
+    }
+    area.set({ [STARTUP_STATE_KEY]: payload });
+  } catch {
+    // ignore
+  }
+}
+
+function clearStartupStateStorage() {
+  writeStartupState(null);
+}
+
+function persistStartupState() {
+  const payload = {
+    captureUntil: startupCaptureUntil || 0,
+    tabIds: Array.from(startupTabs),
+  };
+  if (!payload.captureUntil && payload.tabIds.length === 0) {
+    clearStartupStateStorage();
+    return;
+  }
+  writeStartupState(payload);
+}
+
+async function restoreStartupState() {
+  try {
+    const stored = await readStartupState(null);
+    if (!stored || typeof stored !== "object") return;
+    restoredStartupState = true;
+    const capturedUntil = typeof stored.captureUntil === "number" ? stored.captureUntil : 0;
+    if (capturedUntil > Date.now()) {
+      startupCaptureUntil = capturedUntil;
+    } else {
+      startupCaptureUntil = 0;
+    }
+    if (Array.isArray(stored.tabIds)) {
+      stored.tabIds.forEach((id) => {
+        if (typeof id === "number") startupTabs.add(id);
+      });
+    }
+    if (!startupCaptureUntil && startupTabs.size === 0) {
+      clearStartupStateStorage();
+    }
+  } catch {
+    // ignore
+  }
+}
+
+const startupStateReady = restoreStartupState();
+
+function ensureStartupWindow() {
+  if (startupCaptureUntil || restoredStartupState) return;
+  isStartup = true;
+  startupCaptureUntil = Date.now() + STARTUP_NEW_TAB_CAPTURE_MS;
+  persistStartupState();
+}
 
 function isDuringExtendedStartup() {
   if (!startupCaptureUntil) return false;
-  if (Date.now() > startupCaptureUntil) {
-    startupCaptureUntil = 0;
-    return false;
-  }
-  return true;
+  return Date.now() <= startupCaptureUntil;
 }
 
 // Absolute safety net: fully disable startup gating after the window elapses,
@@ -27,33 +119,43 @@ function isDuringExtendedStartup() {
 setTimeout(() => {
   if (isDuringExtendedStartup()) return;
   isStartup = false;
-  startupTabs.clear();
   startupCaptureUntil = 0;
+  persistStartupState();
 }, STARTUP_NEW_TAB_CAPTURE_MS + 10000);
 
 // Skip auto-open during the startup window for restored tabs, but do not block
 // user-initiated navigations forever. Once the user navigates intentionally or
 // the startup window has expired, remove the tab from the startup set.
-function shouldDeferForStartupTab(tabId, navigationDetails = null) {
-  if (!startupTabs.has(tabId)) return false;
-
+function isUserInitiatedNavigation(navigationDetails = null) {
   const transitionType = navigationDetails?.transitionType || "";
   const qualifiers = Array.isArray(navigationDetails?.transitionQualifiers)
     ? navigationDetails.transitionQualifiers
     : [];
-  const userInitiated =
+  return (
     transitionType === "typed" ||
     transitionType === "generated" ||
     transitionType === "form_submit" ||
     qualifiers.includes("from_address_bar") ||
-    qualifiers.includes("forward_back");
+    qualifiers.includes("forward_back")
+  );
+}
 
-  if (userInitiated || !isDuringExtendedStartup()) {
+function shouldDeferForStartupTab(tabId, navigationDetails = null) {
+  if (!startupTabs.has(tabId)) return false;
+
+  if (isUserInitiatedNavigation(navigationDetails)) {
     startupTabs.delete(tabId);
+    persistStartupState();
     return false;
   }
 
   return true;
+}
+
+function isSessionRestore(details) {
+  const qualifiers = Array.isArray(details?.transitionQualifiers) ? details.transitionQualifiers : [];
+  const type = details?.transitionType || "";
+  return qualifiers.includes("from_session_restore") || qualifiers.includes("from_history") || type === "auto_bookmark";
 }
 
 function getTabUrlCandidate(tab) {
@@ -95,10 +197,17 @@ function shouldFlagAsStartupTab(tab) {
   return /^(https?|file|ftp):/i.test(url);
 }
 
-function rememberStartupTab(tab) {
+function rememberStartupTab(tab, { persist = true } = {}) {
   if (shouldFlagAsStartupTab(tab)) {
     startupTabs.add(tab.id);
+    if (persist) persistStartupState();
   }
+}
+
+function markTabAsStartup(tabId) {
+  if (typeof tabId !== "number" || tabId < 0) return;
+  startupTabs.add(tabId);
+  persistStartupState();
 }
 
 // -------------------------------
@@ -142,11 +251,14 @@ function captureStartupTabs() {
   try {
     if (!chrome.tabs || typeof chrome.tabs.query !== "function") {
       isStartup = false;
+      persistStartupState();
       return;
     }
     chrome.tabs.query({}, (tabs) => {
       try {
-        (tabs || []).forEach(rememberStartupTab);
+        startupTabs.clear();
+        (tabs || []).forEach((t) => rememberStartupTab(t, { persist: false }));
+        persistStartupState();
       } finally {
         // mark startup phase complete once we've captured initial tabs
         isStartup = false;
@@ -154,6 +266,7 @@ function captureStartupTabs() {
     });
   } catch {
     isStartup = false;
+    persistStartupState();
   }
 }
 
@@ -165,6 +278,7 @@ if (
   typeof chrome.runtime.onStartup.addListener === "function"
 ) {
   chrome.runtime.onStartup.addListener(async () => {
+    await startupStateReady;
     isStartup = true;
     try {
       const existing = await getDynamicRules();
@@ -175,12 +289,14 @@ if (
     } catch {
       // ignore
     }
-    captureStartupTabs();
     startupCaptureUntil = Date.now() + STARTUP_NEW_TAB_CAPTURE_MS;
+    persistStartupState();
+    captureStartupTabs();
   });
 } else {
   // If onStartup isn't available, disable startup gating
-  isStartup = false;
+  isStartup = true;
+  startupCaptureUntil = Date.now() + STARTUP_NEW_TAB_CAPTURE_MS;
 }
 
 // Keep startupTabs up to date
@@ -191,7 +307,9 @@ if (
   typeof chrome.tabs.onRemoved.addListener === "function"
 ) {
   chrome.tabs.onRemoved.addListener((tabId) => {
-    startupTabs.delete(tabId);
+    startupStateReady.then(() => {
+      if (startupTabs.delete(tabId)) persistStartupState();
+    });
   });
 }
 
@@ -202,8 +320,11 @@ if (
   typeof chrome.tabs.onCreated.addListener === "function"
 ) {
   chrome.tabs.onCreated.addListener((tab) => {
-    if (!isDuringExtendedStartup()) return;
-    rememberStartupTab(tab);
+    startupStateReady.then(() => {
+      ensureStartupWindow();
+      if (!isDuringExtendedStartup()) return;
+      rememberStartupTab(tab);
+    });
   });
 }
 
@@ -346,7 +467,14 @@ const handledDownloadIds = new Set();
 // EARLY redirect (prevents most .mpd downloads)
 chrome.webNavigation.onBeforeNavigate.addListener(async (details) => {
   try {
+    await startupStateReady;
+    ensureStartupWindow();
+    if (isSessionRestore(details)) {
+      markTabAsStartup(details.tabId);
+      return;
+    }
     if (isStartup && isDuringExtendedStartup()) return;
+    if (!isUserInitiatedNavigation(details) && isDuringExtendedStartup()) return;
     if (details.frameId !== 0 || details.tabId < 0) return;
     if (isExtensionUrl(details.url)) return;
     if (shouldDeferForStartupTab(details.tabId, details)) return;
@@ -369,7 +497,14 @@ chrome.webNavigation.onBeforeNavigate.addListener(async (details) => {
 // Fallback redirect
 chrome.webNavigation.onCommitted.addListener(async (details) => {
   try {
+    await startupStateReady;
+    ensureStartupWindow();
+    if (isSessionRestore(details)) {
+      markTabAsStartup(details.tabId);
+      return;
+    }
     if (isStartup && isDuringExtendedStartup()) return;
+    if (!isUserInitiatedNavigation(details) && isDuringExtendedStartup()) return;
     if (details.frameId !== 0 || details.tabId < 0) return;
     if (isExtensionUrl(details.url)) return;
     if (shouldDeferForStartupTab(details.tabId, details)) return;
@@ -400,6 +535,8 @@ chrome.webNavigation.onErrorOccurred.addListener((details) => {
 // -------------------------------
 async function handleManifestDownload(item) {
   try {
+    await startupStateReady;
+    ensureStartupWindow();
     if (!item) return;
     const url = item.finalUrl || item.url || "";
     const mime = item.mime || "";
@@ -408,6 +545,7 @@ async function handleManifestDownload(item) {
     // Only skip startup gating when we know the tab is a restored startup tab within the window.
     const tabId = typeof item.tabId === "number" && item.tabId >= 0 ? item.tabId : null;
     if (isStartup && isDuringExtendedStartup()) return;
+    if (!isUserInitiatedNavigation(item) && isDuringExtendedStartup()) return;
     if (tabId !== null && shouldDeferForStartupTab(tabId)) return;
 
     const { autoOpenViewer = true } = await getSync({ autoOpenViewer: true });

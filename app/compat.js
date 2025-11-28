@@ -7,6 +7,7 @@
   const copyBtn = $('copyJson');
   const copyShareLinkBtn = $('copyShareLink');
   const shareStatusEl = $('shareStatus');
+  const backBtn = $('back');
   const toggleThemeBtn = $('toggleTheme');
 
   const RESULTS = { env: {}, codecs: [], mse: [], mediaCapabilities: {}, drmMatrix: [] };
