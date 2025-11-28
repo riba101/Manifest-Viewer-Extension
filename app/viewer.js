@@ -13,6 +13,7 @@ const codeEl = $('code');
 const metaEl = $('meta');
 const toggleThemeBtn = $('toggleTheme');
 const openCompatBtn = $('openCompat');
+const openDiffBtn = $('openDiff');
 const headersBtn = $('editHeaders');
 const headersPanel = $('headersPanel');
 const headersSaveBtn = $('headersSave');
@@ -2445,6 +2446,45 @@ if (openCompatBtn) {
     } catch {}
     const isExt = typeof chrome !== 'undefined' && chrome.runtime && typeof chrome.runtime.getURL === 'function';
     const page = isExt ? chrome.runtime.getURL('compat.html') : 'compat.html';
+    try { window.location.href = page; } catch { try { window.open(page, '_self'); } catch {} }
+  });
+}
+
+if (openDiffBtn) {
+  openDiffBtn.addEventListener('click', () => {
+    try {
+      if (hasLoadedManifest && lastLoadedUrl) {
+        const current = {
+          url: lastLoadedUrl || '',
+          text: lastLoadedText || '',
+          mode: lastLoadedMode || 'auto',
+          contentType: lastLoadedContentType || '',
+          meta: lastResponseMeta ? { ...lastResponseMeta } : null,
+          selectedMode: modeSelect ? modeSelect.value : 'auto'
+        };
+        sessionStorage.setItem('mv_diff_current', JSON.stringify(current));
+
+        const nav = Array.isArray(navigationStack)
+          ? navigationStack
+              .filter((s) => s && s.mode !== 'mp4' && s.mode !== 'segments')
+              .map((s) => ({
+                url: s.url || '',
+                text: s.text || '',
+                mode: s.mode || 'auto',
+                contentType: s.contentType || '',
+                meta: s.meta ? { ...s.meta } : null,
+                selectedMode: s.selectedMode || 'auto'
+              }))
+          : [];
+        sessionStorage.setItem('mv_diff_nav', JSON.stringify(nav));
+      } else {
+        sessionStorage.removeItem('mv_diff_current');
+        sessionStorage.removeItem('mv_diff_nav');
+      }
+    } catch {}
+
+    const isExt = typeof chrome !== 'undefined' && chrome.runtime && typeof chrome.runtime.getURL === 'function';
+    const page = isExt ? chrome.runtime.getURL('diff.html') : 'diff.html';
     try { window.location.href = page; } catch { try { window.open(page, '_self'); } catch {} }
   });
 }

@@ -1,0 +1,203 @@
+<!doctype html>
+<html data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Manifest Diff • Manifest Viewer</title>
+    <meta name="apple-mobile-web-app-title" content="Manifest Viewer" />
+    <link rel="stylesheet" href="viewer.css" />
+    <link rel="icon" type="image/png" href="icons/favicon-96x96.png" sizes="96x96" />
+    <link rel="icon" type="image/svg+xml" href="icons/favicon.svg" />
+    <link rel="shortcut icon" href="icons/favicon.ico" />
+    <link rel="apple-touch-icon" sizes="180x180" href="icons/apple-touch-icon.png" />
+    <link rel="manifest" href="icons/site.webmanifest" />
+    <style>
+      * { box-sizing: border-box; }
+      html, body { width: 100%; max-width: 100%; }
+      body { margin: 0; overflow-x: hidden; }
+
+      .diff-topbar {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        padding: 12px;
+        border-bottom: 1px solid var(--border);
+        background: var(--panel);
+        position: sticky;
+        top: 0;
+        z-index: 10;
+        width: 100%;
+        max-width: 100%;
+        margin: 0 auto;
+        padding: 10px 8px;
+      }
+      .diff-topbar .spacer { flex: 1; }
+      .diff-topbar button {
+        height: 32px;
+        padding: 0 12px;
+        border-radius: 8px;
+        border: 1px solid var(--border);
+        background: var(--bg);
+        color: var(--text);
+        font: inherit;
+        font-size: 13px;
+        cursor: pointer;
+      }
+      .diff-topbar button:hover { border-color: var(--acc1); }
+
+      main.diff {
+        padding: 8px 8px 20px;
+        display: grid;
+        gap: 10px;
+        width: 100%;
+        max-width: 100%;
+        margin: 0 auto;
+      }
+
+      .card {
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        background: var(--panel);
+        padding: 12px 14px;
+        width: 100%;
+        overflow-x: hidden;
+      }
+
+      .card h2 {
+        margin: 0 0 10px;
+        font-size: 14px;
+        text-transform: uppercase;
+        letter-spacing: .08em;
+      }
+
+      .note { color: var(--muted); font-size: 12px; }
+      .small { font-size: 11px; color: var(--muted); }
+      .code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
+
+      .sources-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+        gap: 10px;
+      }
+      .source {
+        display: grid;
+        gap: 6px;
+      }
+      .source label { font-size: 12px; color: var(--muted); }
+      .source input, .source select {
+        height: 34px;
+        padding: 0 10px;
+        border-radius: 8px;
+        border: 1px solid var(--border);
+        background: var(--bg);
+        color: var(--text);
+        font: inherit;
+        font-size: 13px;
+      }
+      .source .row { display: flex; gap: 8px; align-items: center; }
+      .source button {
+        height: 32px;
+        padding: 0 10px;
+        border-radius: 8px;
+        border: 1px solid var(--border);
+        background: var(--bg);
+        color: var(--text);
+        font: inherit;
+        font-size: 12px;
+        cursor: pointer;
+      }
+      .source button:hover { border-color: var(--acc1); }
+
+      .pill { display:inline-flex; align-items:center; gap:6px; padding:2px 8px; border-radius:999px; font-size:11px; }
+      .ok { background: rgba(52,211,153, .15); color: var(--acc3); border: 1px solid rgba(52,211,153, .35); }
+      .no { background: rgba(248,113,113,.15); color: var(--error); border:1px solid rgba(248,113,113,.35); }
+      .maybe { background: rgba(251,191,36,.15); color: var(--warning); border:1px solid rgba(251,191,36,.35); }
+
+      .diff-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 8px; }
+      .diff-group { border:1px solid var(--border); border-radius:10px; padding:10px; background: var(--bg); }
+      .diff-group h3 { margin:0 0 6px; font-size:13px; }
+      .diff-group ul { margin:0; padding-left:16px; color: var(--muted); }
+      .diff-group li { margin: 2px 0; }
+      .side-by-side { display:grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap:10px; }
+      .manifest-pane { border:1px solid var(--border); border-radius:10px; overflow:hidden; background: var(--bg); }
+      .manifest-pane pre { margin:0; padding:10px; overflow:auto; max-height:360px; }
+      .pane-header { padding:8px 10px; border-bottom:1px solid var(--border); font-weight:600; background: var(--panel); }
+
+      @media (max-width: 760px) {
+        .diff-topbar { flex-wrap: wrap; }
+        .diff-topbar strong { width: 100%; order: -1; font-size: 15px; text-align: left; }
+        main.diff { padding: 8px; }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="diff-topbar">
+      <button id="backToViewer" title="Back to viewer">← Viewer</button>
+      <strong>Manifest Diff</strong>
+      <span class="spacer"></span>
+      <button id="swapSources" title="Swap A/B">Swap</button>
+      <button id="runDiff">Run Diff</button>
+      <button id="toggleTheme" title="Toggle theme">☀️/🌙</button>
+    </header>
+
+    <div id="status" class="note" style="padding: 0 12px 8px;"></div>
+
+    <main class="diff">
+      <section class="card">
+        <h2>Sources</h2>
+        <div class="note" style="margin-bottom:8px">Paste two manifests or pick from your recent history to compare them.</div>
+        <div class="sources-grid">
+          <div class="source">
+            <label for="urlA">Manifest A</label>
+            <input id="urlA" type="url" placeholder="https://…/manifest-a.mpd or .m3u8" />
+            <div class="row">
+              <select id="historyA" aria-label="History for manifest A">
+                <option value="">History snapshot…</option>
+              </select>
+              <button id="useCurrentA" type="button">Use current</button>
+            </div>
+          </div>
+          <div class="source">
+            <label for="urlB">Manifest B</label>
+            <input id="urlB" type="url" placeholder="https://…/manifest-b.mpd or .m3u8" />
+            <div class="row">
+              <select id="historyB" aria-label="History for manifest B">
+                <option value="">History snapshot…</option>
+              </select>
+              <button id="useCurrentB" type="button">Use current</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Overview</h2>
+        <div id="overview"></div>
+      </section>
+
+      <section class="card">
+        <h2>Manifests</h2>
+        <div class="note" style="margin-bottom:8px">Raw manifests shown side-by-side for quick inspection.</div>
+        <div class="side-by-side" id="manifestViews">
+          <div class="manifest-pane">
+            <div class="pane-header">A</div>
+            <pre><code id="manifestA" class="language-plain">Load a manifest to view it here.</code></pre>
+          </div>
+          <div class="manifest-pane">
+            <div class="pane-header">B</div>
+            <pre><code id="manifestB" class="language-plain">Load a manifest to view it here.</code></pre>
+          </div>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Diff</h2>
+        <div id="diffResults"></div>
+      </section>
+    </main>
+
+    <footer id="app-footer"></footer>
+    <script src="footer.js"></script>
+    <script src="diff.js"></script>
+  </body>
+</html>
