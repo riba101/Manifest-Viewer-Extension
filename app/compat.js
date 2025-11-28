@@ -654,9 +654,9 @@
         const bytes = new TextEncoder().encode(json);
         let binary = '';
         bytes.forEach((b) => { binary += String.fromCharCode(b); });
-        return btoa(binary);
+        return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
       }
-      return btoa(unescape(encodeURIComponent(json)));
+      return btoa(unescape(encodeURIComponent(json))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
     } catch (err) {
       console.error('Failed to encode report', err);
       return '';
@@ -665,7 +665,12 @@
 
   function decodeReport(encoded) {
     try {
-      const binary = atob(encoded);
+      if (!encoded) return null;
+      let normalized = encoded.trim();
+      normalized = normalized.replace(/-/g, '+').replace(/_/g, '/');
+      const padding = normalized.length % 4 === 0 ? 0 : 4 - (normalized.length % 4);
+      normalized = normalized.padEnd(normalized.length + padding, '=');
+      const binary = atob(normalized);
       let jsonString = '';
       if (typeof TextDecoder !== 'undefined') {
         const bytes = Uint8Array.from(binary, (c) => c.charCodeAt(0));
@@ -754,21 +759,26 @@
   }
 
   function maybeLoadSharedReportFromUrl() {
+    let hadCompatParam = false;
     try {
       const params = new URLSearchParams(window.location.search);
       const encoded = params.get('compat');
-      if (!encoded) return false;
+      if (!encoded) return { loaded: false, hadParam: false };
+      hadCompatParam = true;
       const report = decodeReport(encoded);
       if (!report || report.schema !== 'mv-compat-v1') {
         setShareStatus('Shared report is invalid or uses an unknown schema.', true);
-        return false;
+        return { loaded: false, hadParam: true };
       }
       const hydrated = hydrateFromReport(report);
-      return !!hydrated;
+      if (hydrated) {
+        setShareStatus('Loaded shared report (frozen snapshot).', false);
+      }
+      return { loaded: !!hydrated, hadParam: true };
     } catch (err) {
       console.warn('Failed to load shared report from URL', err);
       setShareStatus('Could not load shared report from link.', true);
-      return false;
+      return { loaded: false, hadParam: hadCompatParam };
     }
   }
 
@@ -974,8 +984,8 @@
   }
 
   async function init() {
-    const loaded = maybeLoadSharedReportFromUrl();
-    if (!loaded) {
+    const { loaded, hadParam } = maybeLoadSharedReportFromUrl();
+    if (!loaded && !hadParam) {
       await runAll();
     }
   }
