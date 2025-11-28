@@ -14,6 +14,7 @@ const metaEl = $('meta');
 const toggleThemeBtn = $('toggleTheme');
 const openCompatBtn = $('openCompat');
 const openDiffBtn = $('openDiff');
+const openProbeBtn = $('openProbe');
 const headersBtn = $('editHeaders');
 const headersPanel = $('headersPanel');
 const headersSaveBtn = $('headersSave');
@@ -2485,6 +2486,30 @@ if (openDiffBtn) {
 
     const isExt = typeof chrome !== 'undefined' && chrome.runtime && typeof chrome.runtime.getURL === 'function';
     const page = isExt ? chrome.runtime.getURL('diff.html') : 'diff.html';
+    try { window.location.href = page; } catch { try { window.open(page, '_self'); } catch {} }
+  });
+}
+
+if (openProbeBtn) {
+  openProbeBtn.addEventListener('click', () => {
+    try {
+      if (hasLoadedManifest && lastLoadedUrl) {
+        const current = {
+          url: lastLoadedUrl || '',
+          text: lastLoadedText || '',
+          mode: lastLoadedMode || 'auto',
+          contentType: lastLoadedContentType || '',
+          meta: lastResponseMeta ? { ...lastResponseMeta } : null,
+          selectedMode: modeSelect ? modeSelect.value : 'auto'
+        };
+        sessionStorage.setItem('mv_probe_current', JSON.stringify(current));
+      } else {
+        sessionStorage.removeItem('mv_probe_current');
+      }
+    } catch {}
+
+    const isExt = typeof chrome !== 'undefined' && chrome.runtime && typeof chrome.runtime.getURL === 'function';
+    const page = isExt ? chrome.runtime.getURL('probe.html') : 'probe.html';
     try { window.location.href = page; } catch { try { window.open(page, '_self'); } catch {} }
   });
 }

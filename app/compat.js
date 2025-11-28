@@ -8,7 +8,6 @@
   const copyShareLinkBtn = $('copyShareLink');
   const shareStatusEl = $('shareStatus');
   const toggleThemeBtn = $('toggleTheme');
-  const backBtn = $('backToViewer');
 
   const RESULTS = { env: {}, codecs: [], mse: [], mediaCapabilities: {}, drmMatrix: [] };
   const HOSTED_COMPAT_URL = 'https://123-test.stream/app/compat.html';
@@ -647,37 +646,101 @@
     }
   }
 
-  function encodeReport(report) {
+  // Remove verbose attempt histories to keep shared payloads small
+  function stripDrmAttempts(results) {
+    if (!results || !Array.isArray(results.drmMatrix)) return;
+    results.drmMatrix.forEach((row) => {
+      if (!row || typeof row !== 'object' || !row.keySystems) return;
+      Object.values(row.keySystems).forEach((ks) => {
+        if (!ks || typeof ks !== 'object') return;
+        delete ks.attempts;
+        if (ks.schemes && typeof ks.schemes === 'object') {
+          Object.values(ks.schemes).forEach((scheme) => {
+            if (scheme && typeof scheme === 'object') delete scheme.attempts;
+          });
+        }
+      });
+    });
+  }
+
+  // Base64 helpers (URL-safe)
+  function toBase64Url(bytes) {
+    let binary = '';
+    bytes.forEach((b) => { binary += String.fromCharCode(b); });
+    return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+  }
+  function fromBase64Url(encoded) {
+    let normalized = encoded.trim().replace(/-/g, '+').replace(/_/g, '/');
+    const padding = normalized.length % 4 === 0 ? 0 : 4 - (normalized.length % 4);
+    normalized = normalized.padEnd(normalized.length + padding, '=');
+    const binary = atob(normalized);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+    return bytes;
+  }
+
+  async function gzipBytes(str) {
+    if (typeof CompressionStream !== 'function') return null;
+    try {
+      const cs = new CompressionStream('gzip');
+      const writer = cs.writable.getWriter();
+      writer.write(new TextEncoder().encode(str));
+      writer.close();
+      const resp = new Response(cs.readable);
+      const buf = await resp.arrayBuffer();
+      return new Uint8Array(buf);
+    } catch {
+      return null;
+    }
+  }
+
+  async function gunzipBytes(bytes) {
+    if (typeof DecompressionStream !== 'function') return null;
+    try {
+      const ds = new DecompressionStream('gzip');
+      const stream = new Blob([bytes]).stream().pipeThrough(ds);
+      const resp = new Response(stream);
+      const buf = await resp.arrayBuffer();
+      return new Uint8Array(buf);
+    } catch {
+      return null;
+    }
+  }
+
+  async function encodeReport(report, options = {}) {
     try {
       const json = JSON.stringify(report);
-      if (typeof TextEncoder !== 'undefined') {
-        const bytes = new TextEncoder().encode(json);
-        let binary = '';
-        bytes.forEach((b) => { binary += String.fromCharCode(b); });
-        return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+      const stringToBytes = (str) => {
+        if (typeof TextEncoder !== 'undefined') return new TextEncoder().encode(str);
+        const escaped = unescape(encodeURIComponent(str));
+        const arr = new Uint8Array(escaped.length);
+        for (let i = 0; i < escaped.length; i += 1) arr[i] = escaped.charCodeAt(i);
+        return arr;
+      };
+      const bytes = stringToBytes(json);
+      if (options.compress === true) {
+        const gz = await gzipBytes(json);
+        if (gz && gz.length) return toBase64Url(gz);
       }
-      return btoa(unescape(encodeURIComponent(json))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+      return toBase64Url(bytes);
     } catch (err) {
       console.error('Failed to encode report', err);
       return '';
     }
   }
 
-  function decodeReport(encoded) {
+  async function decodeReport(encoded) {
+    if (!encoded) return null;
     try {
-      if (!encoded) return null;
-      let normalized = encoded.trim();
-      normalized = normalized.replace(/-/g, '+').replace(/_/g, '/');
-      const padding = normalized.length % 4 === 0 ? 0 : 4 - (normalized.length % 4);
-      normalized = normalized.padEnd(normalized.length + padding, '=');
-      const binary = atob(normalized);
+      const bytes = fromBase64Url(encoded);
+      const maybeJsonBytes = await gunzipBytes(bytes);
+      const dataBytes = maybeJsonBytes && maybeJsonBytes.length ? maybeJsonBytes : bytes;
       let jsonString = '';
       if (typeof TextDecoder !== 'undefined') {
-        const bytes = Uint8Array.from(binary, (c) => c.charCodeAt(0));
-        jsonString = new TextDecoder().decode(bytes);
+        jsonString = new TextDecoder().decode(dataBytes);
       } else {
-        jsonString = decodeURIComponent(Array.prototype.map.call(binary, (ch) => {
-          const hex = ch.charCodeAt(0).toString(16).padStart(2, '0');
+        jsonString = decodeURIComponent(Array.prototype.map.call(dataBytes, (ch) => {
+          const hex = ch.toString(16).padStart(2, '0');
           return `%${hex}`;
         }).join(''));
       }
@@ -688,8 +751,11 @@
     }
   }
 
-  function buildReportPayload() {
+  function buildReportPayload(options = {}) {
     const snapshot = cloneResults();
+    if (options.compact) {
+      stripDrmAttempts(snapshot);
+    }
     return {
       schema: 'mv-compat-v1',
       generatedAt: new Date().toISOString(),
@@ -713,8 +779,8 @@
       setShareStatus('Run compatibility checks before sharing.', true);
       return;
     }
-    const report = buildReportPayload();
-    const encoded = encodeReport(report);
+    const report = buildReportPayload({ compact: true });
+    const encoded = await encodeReport(report, { compress: true });
     if (!encoded) {
       setShareStatus('Unable to build share link.', true);
       return;
@@ -758,14 +824,14 @@
     return true;
   }
 
-  function maybeLoadSharedReportFromUrl() {
+  async function maybeLoadSharedReportFromUrl() {
     let hadCompatParam = false;
     try {
       const params = new URLSearchParams(window.location.search);
       const encoded = params.get('compat');
       if (!encoded) return { loaded: false, hadParam: false };
       hadCompatParam = true;
-      const report = decodeReport(encoded);
+      const report = await decodeReport(encoded);
       if (!report || report.schema !== 'mv-compat-v1') {
         setShareStatus('Shared report is invalid or uses an unknown schema.', true);
         return { loaded: false, hadParam: true };
@@ -984,8 +1050,8 @@
   }
 
   async function init() {
-    const { loaded, hadParam } = maybeLoadSharedReportFromUrl();
-    if (!loaded && !hadParam) {
+    const { loaded, hadParam } = await maybeLoadSharedReportFromUrl();
+    if (!loaded) {
       await runAll();
     }
   }

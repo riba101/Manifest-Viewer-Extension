@@ -24,7 +24,7 @@
         border-bottom: 1px solid var(--border);
         background: var(--panel);
         position: sticky;
-        top: 0;
+        top: var(--nav-height, 0px);
         z-index: 10;
         width: 100%;
         max-width: 100%;
@@ -95,6 +95,7 @@
         font-size: 13px;
       }
       .source .row { display: flex; gap: 8px; align-items: center; }
+      .source .row select { flex: 1; }
       .source button {
         height: 32px;
         padding: 0 10px;
@@ -123,6 +124,14 @@
       .manifest-pane pre { margin:0; padding:10px; overflow:auto; max-height:360px; }
       .pane-header { padding:8px 10px; border-bottom:1px solid var(--border); font-weight:600; background: var(--panel); }
 
+      @media (max-width: 1300px) {
+        .sources-grid,
+        .side-by-side,
+        .diff-grid {
+          grid-template-columns: 1fr;
+        }
+      }
+
       @media (max-width: 760px) {
         .diff-topbar { flex-wrap: wrap; }
         .diff-topbar strong { width: 100%; order: -1; font-size: 15px; text-align: left; }
@@ -130,13 +139,12 @@
       }
     </style>
   </head>
-  <body>
+  <body data-page="diff">
     <header class="diff-topbar">
-      <button id="backToViewer" title="Back to viewer">← Viewer</button>
       <strong>Manifest Diff</strong>
       <span class="spacer"></span>
       <button id="swapSources" title="Swap A/B">Swap</button>
-      <button id="runDiff">Run Diff</button>
+      <button id="runDiff">Run Manifest Diff</button>
       <button id="toggleTheme" title="Toggle theme">☀️/🌙</button>
     </header>
 
@@ -154,7 +162,6 @@
               <select id="historyA" aria-label="History for manifest A">
                 <option value="">History snapshot…</option>
               </select>
-              <button id="useCurrentA" type="button">Use current</button>
             </div>
           </div>
           <div class="source">
@@ -164,7 +171,6 @@
               <select id="historyB" aria-label="History for manifest B">
                 <option value="">History snapshot…</option>
               </select>
-              <button id="useCurrentB" type="button">Use current</button>
             </div>
           </div>
         </div>
@@ -191,12 +197,13 @@
       </section>
 
       <section class="card">
-        <h2>Diff</h2>
+        <h2>Manifest Diff</h2>
         <div id="diffResults"></div>
       </section>
     </main>
 
     <footer id="app-footer"></footer>
+    <script src="nav.js"></script>
     <script src="footer.js"></script>
     <script src="diff.js"></script>
   </body>

@@ -1,0 +1,200 @@
+<!doctype html>
+<html data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Segments Timeline • Manifest Viewer</title>
+    <meta name="apple-mobile-web-app-title" content="Manifest Viewer" />
+    <link rel="stylesheet" href="viewer.css" />
+    <link rel="icon" type="image/png" href="icons/favicon-96x96.png" sizes="96x96" />
+    <link rel="icon" type="image/svg+xml" href="icons/favicon.svg" />
+    <link rel="shortcut icon" href="icons/favicon.ico" />
+    <link rel="apple-touch-icon" sizes="180x180" href="icons/apple-touch-icon.png" />
+    <link rel="manifest" href="icons/site.webmanifest" />
+    <style>
+      * { box-sizing: border-box; }
+      html, body { width: 100%; max-width: 100%; }
+      body { margin: 0; overflow-x: hidden; }
+
+      .probe-topbar {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        padding: 10px 8px;
+        border-bottom: 1px solid var(--border);
+        background: var(--panel);
+        position: sticky;
+        top: var(--nav-height, 0px);
+        z-index: 10;
+        width: 100%;
+      }
+      .probe-topbar .spacer { flex: 1; }
+      .probe-topbar input {
+        flex: 1;
+        height: 34px;
+        padding: 0 10px;
+        border-radius: 8px;
+        border: 1px solid var(--border);
+        background: var(--bg);
+        color: var(--text);
+        font: inherit;
+        font-size: 13px;
+      }
+      .probe-topbar button, .probe-topbar select {
+        height: 34px;
+        padding: 0 12px;
+        border-radius: 8px;
+        border: 1px solid var(--border);
+        background: var(--bg);
+        color: var(--text);
+        font: inherit;
+        font-size: 13px;
+        cursor: pointer;
+      }
+      #probeCount {
+        flex: 0 0 84px;
+      }
+      .probe-topbar button:hover, .probe-topbar select:hover { border-color: var(--acc1); }
+
+      main.probe {
+        padding: 8px 8px 20px;
+        display: grid;
+        gap: 10px;
+        width: 100%;
+        max-width: 100%;
+        margin: 0 auto;
+      }
+
+      .card {
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        background: var(--panel);
+        padding: 12px 14px;
+        width: 100%;
+        overflow-x: hidden;
+      }
+
+      .card h2 {
+        margin: 0 0 10px;
+        font-size: 14px;
+        text-transform: uppercase;
+        letter-spacing: .08em;
+      }
+
+      .note { color: var(--muted); font-size: 12px; }
+      .small { font-size: 11px; color: var(--muted); }
+      .code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
+
+      .timeline {
+        position: relative;
+        width: 100%;
+        min-height: 80px;
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        background: var(--bg);
+        overflow-x: auto;
+        overflow-y: auto;
+      }
+      .timeline-inner {
+        position: relative;
+        width: 100%;
+      }
+      .ticks {
+        position: relative;
+        height: 22px;
+        border-bottom: 1px dashed var(--border);
+      }
+      .tick {
+        position: absolute;
+        top: 0;
+        height: 100%;
+        border-left: 1px dashed var(--border);
+        color: var(--muted);
+        font-size: 10px;
+        padding-left: 2px;
+        white-space: nowrap;
+      }
+      .timeline .bar {
+        position: absolute;
+        top: 20px;
+        height: 16px;
+        background: rgba(138,180,248,.35);
+        border: 1px solid rgba(138,180,248,.6);
+        border-radius: 4px;
+      }
+      .timeline .gap {
+        position: absolute;
+        top: 60px;
+        height: 10px;
+        background: rgba(248,113,113,.4);
+        border-radius: 4px;
+      }
+      .timeline .label {
+        position: absolute;
+        top: 0;
+        font-size: 11px;
+        color: var(--muted);
+        white-space: nowrap;
+      }
+
+      table.matrix { width:100%; border-collapse: collapse; font-size: 12px; }
+      table.matrix th, table.matrix td {
+        border:1px solid var(--border);
+        padding:6px 8px;
+        text-align:left;
+        word-break: break-word;
+        white-space: normal;
+      }
+      table.matrix thead { background: rgba(138,180,248,.12); }
+      .pill { display:inline-flex; align-items:center; gap:6px; padding:2px 8px; border-radius:999px; font-size:11px; }
+      .ok { background: rgba(52,211,153, .15); color: var(--acc3); border: 1px solid rgba(52,211,153, .35); }
+      .no { background: rgba(248,113,113,.15); color: var(--error); border:1px solid rgba(248,113,113,.35); }
+      .maybe { background: rgba(251,191,36,.15); color: var(--warning); border:1px solid rgba(251,191,36,.35); }
+      #segmentsTable details { margin-bottom: 10px; }
+      #segmentsTable summary { cursor: pointer; user-select: none; }
+      #segmentsTable details table { margin-top: 6px; }
+
+      @media (max-width: 760px) {
+        .probe-topbar { flex-wrap: wrap; }
+        .probe-topbar input { width: 100%; order: -1; }
+        #probeCount { flex: 1 1 100%; width: 100%; }
+        .probe-topbar .spacer { display: none; }
+        main.probe { padding: 8px; }
+      }
+    </style>
+  </head>
+  <body data-page="probe">
+    <header class="probe-topbar">
+      <input id="probeUrl" type="url" placeholder="https://…/manifest.mpd or .m3u8" />
+      <input id="probeCount" type="number" min="1" value="10" title="Segments to probe" />
+      <button id="runProbe">Run</button>
+      <button id="toggleTheme" title="Toggle theme">☀️/🌙</button>
+    </header>
+
+    <div id="status" class="note" style="padding: 0 12px 8px;"></div>
+
+    <main class="probe">
+      <section class="card">
+        <h2>Timeline</h2>
+        <div class="note" style="margin-bottom:8px">Displays segment durations and gaps; live windows are shown with availability range if reported.</div>
+        <div class="small" style="margin-bottom:8px; display:flex; align-items:center; gap:8px;">
+          <label for="timelineZoom" style="font-size:12px;">Zoom</label>
+          <input id="timelineZoom" type="range" min="0" max="100" step="1" value="0" title="0 = fit timeline, 100 = show about two segments" style="flex:1; accent-color: var(--acc1);" />
+          <span id="timelineZoomValue">Fit</span>
+        </div>
+        <div id="timelineWrapper" class="timeline"></div>
+        <div id="timelineMeta" class="small" style="margin-top:6px;"></div>
+      </section>
+
+      <section class="card">
+        <h2>Segments</h2>
+        <div id="segmentsTable"></div>
+      </section>
+    </main>
+
+    <footer id="app-footer"></footer>
+    <script src="nav.js"></script>
+    <script src="footer.js"></script>
+    <script src="probe.js"></script>
+  </body>
+</html>

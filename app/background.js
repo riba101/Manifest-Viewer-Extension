@@ -4,10 +4,13 @@
 // - Downloads fallback: cancel forced downloads of .mpd/.m3u8 and open viewer
 // - No webRequest / webRequestBlocking
 
-let isStartup = true;
+// Default to "not startup" so the service worker restarting mid-session
+// doesn't permanently disable auto-open logic (onStartup only fires once
+// when the browser launches).
+let isStartup = false;
 const startupTabs = new Set();
 
-const STARTUP_NEW_TAB_CAPTURE_MS = 60000;
+const STARTUP_NEW_TAB_CAPTURE_MS = 30000;
 let startupCaptureUntil = 0;
 
 function isDuringExtendedStartup() {
@@ -16,6 +19,40 @@ function isDuringExtendedStartup() {
     startupCaptureUntil = 0;
     return false;
   }
+  return true;
+}
+
+// Absolute safety net: fully disable startup gating after the window elapses,
+// even if something prevented our normal cleanup from running.
+setTimeout(() => {
+  if (isDuringExtendedStartup()) return;
+  isStartup = false;
+  startupTabs.clear();
+  startupCaptureUntil = 0;
+}, STARTUP_NEW_TAB_CAPTURE_MS + 10000);
+
+// Skip auto-open during the startup window for restored tabs, but do not block
+// user-initiated navigations forever. Once the user navigates intentionally or
+// the startup window has expired, remove the tab from the startup set.
+function shouldDeferForStartupTab(tabId, navigationDetails = null) {
+  if (!startupTabs.has(tabId)) return false;
+
+  const transitionType = navigationDetails?.transitionType || "";
+  const qualifiers = Array.isArray(navigationDetails?.transitionQualifiers)
+    ? navigationDetails.transitionQualifiers
+    : [];
+  const userInitiated =
+    transitionType === "typed" ||
+    transitionType === "generated" ||
+    transitionType === "form_submit" ||
+    qualifiers.includes("from_address_bar") ||
+    qualifiers.includes("forward_back");
+
+  if (userInitiated || !isDuringExtendedStartup()) {
+    startupTabs.delete(tabId);
+    return false;
+  }
+
   return true;
 }
 
@@ -128,6 +165,7 @@ if (
   typeof chrome.runtime.onStartup.addListener === "function"
 ) {
   chrome.runtime.onStartup.addListener(async () => {
+    isStartup = true;
     try {
       const existing = await getDynamicRules();
       if (existing && existing.length) {
@@ -288,20 +326,30 @@ function looksLikeManifestUrl(u) {
     return /\.m3u8($|\?)/i.test(pathname) || /\.mpd($|\?)/i.test(pathname);
   } catch { return false; }
 }
+function looksLikeManifestMime(mime) {
+  const m = (mime || "").toLowerCase();
+  if (!m) return false;
+  return (
+    m.includes("dash+xml") ||
+    m.includes("vnd.apple.mpegurl") ||
+    m.includes("x-mpegurl")
+  );
+}
 function viewerUrlFor(u) {
   return chrome.runtime.getURL(`viewer.html?u=${encodeURIComponent(u)}`);
 }
 
 // Track tabs we've redirected to prevent loops
 const redirectingTabs = new Set();
+const handledDownloadIds = new Set();
 
 // EARLY redirect (prevents most .mpd downloads)
 chrome.webNavigation.onBeforeNavigate.addListener(async (details) => {
   try {
-    if (isStartup) return;
+    if (isStartup && isDuringExtendedStartup()) return;
     if (details.frameId !== 0 || details.tabId < 0) return;
     if (isExtensionUrl(details.url)) return;
-    if (startupTabs.has(details.tabId)) return;
+    if (shouldDeferForStartupTab(details.tabId, details)) return;
 
     const { autoOpenViewer = true } = await getSync({ autoOpenViewer: true });
     if (!autoOpenViewer) return;
@@ -321,10 +369,10 @@ chrome.webNavigation.onBeforeNavigate.addListener(async (details) => {
 // Fallback redirect
 chrome.webNavigation.onCommitted.addListener(async (details) => {
   try {
-    if (isStartup) return;
+    if (isStartup && isDuringExtendedStartup()) return;
     if (details.frameId !== 0 || details.tabId < 0) return;
     if (isExtensionUrl(details.url)) return;
-    if (startupTabs.has(details.tabId)) return;
+    if (shouldDeferForStartupTab(details.tabId, details)) return;
 
     const { autoOpenViewer = true } = await getSync({ autoOpenViewer: true });
     if (!autoOpenViewer) return;
@@ -350,27 +398,67 @@ chrome.webNavigation.onErrorOccurred.addListener((details) => {
 // Downloads fallback (handles servers that force download)
 // Requires "downloads" permission in manifest
 // -------------------------------
-chrome.downloads.onCreated.addListener(async (item) => {
+async function handleManifestDownload(item) {
   try {
-    // Only handle downloads that are clearly associated with a tab
-    if (!item || typeof item.tabId !== "number") return;
+    if (!item) return;
+    const url = item.finalUrl || item.url || "";
+    const mime = item.mime || "";
+    if (!url && !mime) return;
 
-    // Do not resurrect old manifest downloads on browser startup or from restored tabs
-    if (isStartup) return;
-    if (startupTabs.has(item.tabId)) return;
+    // Only skip startup gating when we know the tab is a restored startup tab within the window.
+    const tabId = typeof item.tabId === "number" && item.tabId >= 0 ? item.tabId : null;
+    if (isStartup && isDuringExtendedStartup()) return;
+    if (tabId !== null && shouldDeferForStartupTab(tabId)) return;
 
     const { autoOpenViewer = true } = await getSync({ autoOpenViewer: true });
     if (!autoOpenViewer) return;
 
-    const url = item?.finalUrl || item?.url;
-    if (!url || !looksLikeManifestUrl(url)) return;
+    if (!looksLikeManifestUrl(url) && !looksLikeManifestMime(mime)) return;
 
-    // Cancel the download and open viewer instead
-    chrome.downloads.cancel(item.id, () => {
-      chrome.tabs.create({ url: viewerUrlFor(url) });
-    });
+    // Prevent double-handling (e.g., onCreated + onDeterminingFilename)
+    if (typeof item.id === "number") {
+      if (handledDownloadIds.has(item.id)) return;
+      handledDownloadIds.add(item.id);
+      setTimeout(() => handledDownloadIds.delete(item.id), 5000);
+    }
+
+    const destination = viewerUrlFor(url || (item.filename || ""));
+    const openViewer = () => {
+      if (tabId !== null) {
+        chrome.tabs.update(tabId, { url: destination }, () => {
+          // Best-effort cleanup if the tab update fails
+          if (chrome.runtime.lastError && typeof item.id === "number") {
+            handledDownloadIds.delete(item.id);
+          }
+        });
+      } else {
+        chrome.tabs.create({ url: destination }, () => {
+          if (chrome.runtime.lastError && typeof item.id === "number") {
+            handledDownloadIds.delete(item.id);
+          }
+        });
+      }
+    };
+
+    try {
+      chrome.downloads.cancel(item.id, openViewer);
+    } catch {
+      openViewer();
+    }
   } catch {
     // ignore
+  }
+}
+
+chrome.downloads.onCreated.addListener((item) => {
+  handleManifestDownload(item);
+});
+
+// Some Chrome builds surface a manifest download first via onDeterminingFilename; handle it too.
+chrome.downloads.onDeterminingFilename?.addListener((item, suggest) => {
+  handleManifestDownload(item);
+  if (typeof suggest === "function") {
+    try { suggest(); } catch { /* ignore */ }
   }
 });
 

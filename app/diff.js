@@ -4,8 +4,6 @@
   const urlBInput = $('urlB');
   const historyASelect = $('historyA');
   const historyBSelect = $('historyB');
-  const useCurrentA = $('useCurrentA');
-  const useCurrentB = $('useCurrentB');
   const runBtn = $('runDiff');
   const swapBtn = $('swapSources');
   const statusEl = $('status');
@@ -14,7 +12,6 @@
   const manifestAEl = $('manifestA');
   const manifestBEl = $('manifestB');
   const toggleThemeBtn = $('toggleTheme');
-  const backBtn = $('backToViewer');
   const entityDecoder = document.createElement('textarea');
 
   const snapshots = new Map();
@@ -71,12 +68,17 @@
     return `<span class="token string">${escapeHTML(s)}</span>`;
   }
 
+  function stripBom(text) {
+    if (!text) return '';
+    return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
+  }
+
   function highlightJSON(text) {
-    let pretty = text;
-    if (text) {
+    const sanitizedText = stripBom(text || '');
+    let pretty = sanitizedText;
+    if (sanitizedText) {
       try {
-        const sanitized = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
-        const parsed = JSON.parse(sanitized);
+        const parsed = JSON.parse(sanitizedText);
         pretty = JSON.stringify(parsed, null, 2);
       } catch {
         // leave as-is
@@ -281,9 +283,20 @@
     selection.b = aSel;
   }
 
+  function resolveMode(source, text) {
+    const explicit = source && source.mode ? String(source.mode).toLowerCase() : '';
+    const inferred = source && source.analysis && source.analysis.mode
+      ? String(source.analysis.mode).toLowerCase()
+      : '';
+    const preferred = ['dash', 'hls', 'json'].includes(explicit) ? explicit
+      : ['dash', 'hls', 'json'].includes(inferred) ? inferred
+      : '';
+    return preferred || detectMode(text || '', source?.url || '', source?.contentType || '');
+  }
+
   function detectMode(bodyText, url, contentType) {
     const ct = (contentType || '').toLowerCase();
-    const trimmed = (bodyText || '').trim();
+    const trimmed = stripBom(bodyText || '').trim();
     if (/\.mpd(\b|$)/i.test(url) || /dash|mpd/.test(ct) || /^<\?xml/.test(trimmed) || /^<MPD/i.test(trimmed)) {
       return 'dash';
     }
@@ -298,7 +311,8 @@
   async function fetchManifest(url) {
     const t0 = performance.now();
     const res = await fetch(url, { cache: 'no-store' });
-    const text = await res.text();
+    const rawText = await res.text();
+    const text = stripBom(rawText);
     if (!res.ok) {
       const err = new Error(`Fetch failed (${res.status}) for ${url}`);
       err.responseText = text;
@@ -493,9 +507,10 @@
 
   function analyzeManifest(source) {
     if (!source || !source.text) return { mode: 'plain', variants: [], drm: [], scte: [], timeline: { type: 'None' } };
-    const mode = source.mode || detectMode(source.text, source.url || '', source.contentType || '');
-    if (mode === 'hls') return { ...parseHlsManifest(source.text, source.url || ''), url: source.url };
-    if (mode === 'dash') return { ...parseDashManifest(source.text, source.url || ''), url: source.url };
+    const sanitizedText = stripBom(source.text);
+    const mode = resolveMode(source, sanitizedText);
+    if (mode === 'hls') return { ...parseHlsManifest(sanitizedText, source.url || ''), url: source.url };
+    if (mode === 'dash') return { ...parseDashManifest(sanitizedText, source.url || ''), url: source.url };
     return {
       mode,
       variants: [],
@@ -659,13 +674,13 @@
       el.textContent = message;
       return;
     }
-    const sanitized = source.text.charCodeAt(0) === 0xfeff ? source.text.slice(1) : source.text;
-    const mode = source.mode || detectMode(sanitized, source.url || '', source.contentType || '');
+    const sanitized = stripBom(source.text);
+    const mode = resolveMode(source, sanitized);
     let html = '';
     let cls = 'language-plain';
     if (mode === 'dash') {
       html = highlightDASH(sanitized, source.url || '');
-      cls = 'language-plain';
+      cls = 'language-xml';
     } else if (mode === 'hls') {
       html = highlightHLS(sanitized, source.url || '');
       cls = 'language-plain';
@@ -704,7 +719,7 @@
   }
 
   async function runDiff() {
-    setStatus('Running diff…');
+    setStatus('Running manifest diff…');
     diffEl.innerHTML = '';
     overviewEl.innerHTML = '';
     try {
@@ -721,9 +736,9 @@
       const timeline = { a: a.analysis.timeline?.type || 'None', b: b.analysis.timeline?.type || 'None' };
       renderDiff({ variants, drm, scte, timeline });
       renderManifests(a, b);
-      setStatus('Diff complete.');
+      setStatus('Manifest diff complete.');
     } catch (err) {
-      setStatus(err && err.message ? err.message : 'Diff failed.', true);
+      setStatus(err && err.message ? err.message : 'Manifest diff failed.', true);
     }
   }
 
@@ -744,24 +759,31 @@
       selectSnapshot('b', e.target.value || null);
     });
   }
-  if (useCurrentA) useCurrentA.addEventListener('click', () => {
-    if (snapshots.has('current')) selectSnapshot('a', 'current');
-    else setStatus('No current snapshot available.', true);
-  });
-  if (useCurrentB) useCurrentB.addEventListener('click', () => {
-    if (snapshots.has('current')) selectSnapshot('b', 'current');
-    else setStatus('No current snapshot available.', true);
-  });
 
-  if (backBtn) backBtn.addEventListener('click', () => {
-    const isExt = typeof chrome !== 'undefined' && chrome.runtime && typeof chrome.runtime.getURL === 'function';
-    const page = isExt ? chrome.runtime.getURL('viewer.html') : 'viewer.html';
-    try {
-      window.location.href = page;
-    } catch (e) {
-      try { window.open(page, '_self'); } catch {}
-    }
-  });
+  function tryRunDiffOnEnter(event) {
+    if (event.key !== 'Enter') return;
+    const a = urlAInput && urlAInput.value ? urlAInput.value.trim() : '';
+    const b = urlBInput && urlBInput.value ? urlBInput.value.trim() : '';
+    if (!a || !b) return;
+    event.preventDefault();
+    runDiff();
+  }
+
+  function handleGlobalEnter(event) {
+    if (event.defaultPrevented || event.key !== 'Enter') return;
+    if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
+    const tag = (event.target && event.target.tagName ? event.target.tagName.toLowerCase() : '');
+    if (tag === 'textarea') return;
+    const a = urlAInput && urlAInput.value ? urlAInput.value.trim() : '';
+    const b = urlBInput && urlBInput.value ? urlBInput.value.trim() : '';
+    if (!a || !b) return;
+    event.preventDefault();
+    runDiff();
+  }
+
+  if (urlAInput) urlAInput.addEventListener('keydown', tryRunDiffOnEnter);
+  if (urlBInput) urlBInput.addEventListener('keydown', tryRunDiffOnEnter);
+  document.addEventListener('keydown', handleGlobalEnter);
 
   loadSnapshotsFromSession();
   buildHistorySelect(historyASelect);
