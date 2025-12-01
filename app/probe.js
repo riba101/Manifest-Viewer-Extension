@@ -10,6 +10,7 @@
   const timelineZoomInput = $('timelineZoom');
   const timelineZoomValue = $('timelineZoomValue');
   const toggleThemeBtn = $('toggleTheme');
+  const backBtn = $('back');
   let timelineZoom = 0;
   let lastTimelineSegments = null;
   let lastTimelineMeta = null;
@@ -808,6 +809,17 @@ function renderTimeline(segments, meta) {
   if (timelineZoomInput) {
     timelineZoomInput.addEventListener('input', (e) => setZoom(e.target.value));
     setZoom(timelineZoomInput.value || 0);
+  }
+  if (backBtn) {
+    backBtn.addEventListener('click', () => {
+      const isExt = typeof chrome !== 'undefined' && chrome.runtime && typeof chrome.runtime.getURL === 'function';
+      const page = isExt ? chrome.runtime.getURL('viewer.html') : 'viewer.html';
+      try {
+        window.location.href = page;
+      } catch (e) {
+        try { window.open(page, '_self'); } catch {}
+      }
+    });
   }
 
   (function restoreFromViewer() {
