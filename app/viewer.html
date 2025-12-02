@@ -27,13 +27,41 @@
       </div>
       <div class="right">
 
-        <button id="back" title="Back to previous view">← Back</button>
-        <button id="editHeaders" title="Configure custom headers">Custom Headers</button>
-        <button id="refresh" title="Fetch / Refresh">↻ Refresh</button>
-        <button id="copyManifestUrl" title="Copy manifest URL">⧉ Copy Manifest URL</button>
-        <button id="copyManifest" title="Copy manifest text">⧉ Copy Manifest as text</button>
-        <button id="downloadManifest" title="Download manifest text">⇣ Download Manifest</button>
-        <button id="validateManifest" title="Validate manifest">✔ Validate</button>
+        <button id="back" title="Back to previous view" aria-label="Back to previous view">
+          <span class="topbar__icon" aria-hidden="true">←</span>
+          <span class="topbar__label">Back</span>
+          <span class="topbar__label topbar__label--short">Back</span>
+        </button>
+        <button id="editHeaders" title="Configure custom headers" aria-label="Configure custom headers">
+          <span class="topbar__icon" aria-hidden="true">⚙</span>
+          <span class="topbar__label">Custom Headers</span>
+          <span class="topbar__label topbar__label--short">Headers</span>
+        </button>
+        <button id="refresh" title="Fetch / Refresh" aria-label="Fetch or refresh manifest">
+          <span class="topbar__icon" aria-hidden="true">↻</span>
+          <span class="topbar__label">Refresh</span>
+          <span class="topbar__label topbar__label--short">Refresh</span>
+        </button>
+        <button id="copyManifestUrl" title="Copy manifest URL" aria-label="Copy manifest URL">
+          <span class="topbar__icon" aria-hidden="true">🔗</span>
+          <span class="topbar__label">Copy Manifest URL</span>
+          <span class="topbar__label topbar__label--short">URL</span>
+        </button>
+        <button id="copyManifest" title="Copy manifest text" aria-label="Copy manifest text">
+          <span class="topbar__icon" aria-hidden="true">📄</span>
+          <span class="topbar__label">Copy Manifest as text</span>
+          <span class="topbar__label topbar__label--short">Text</span>
+        </button>
+        <button id="downloadManifest" title="Download manifest text" aria-label="Download manifest">
+          <span class="topbar__icon" aria-hidden="true">⇣</span>
+          <span class="topbar__label">Download Manifest</span>
+          <span class="topbar__label topbar__label--short">Download</span>
+        </button>
+        <button id="validateManifest" title="Validate manifest" aria-label="Validate manifest">
+          <span class="topbar__icon" aria-hidden="true">✔</span>
+          <span class="topbar__label">Validate</span>
+          <span class="topbar__label topbar__label--short">Validate</span>
+        </button>
       </div>
     </header>
 

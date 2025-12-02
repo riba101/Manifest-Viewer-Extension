@@ -80,6 +80,9 @@ body {
 }
 
 .app-nav__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   height: 32px;
   padding: 0 12px;
   border-radius: 10px;
@@ -89,6 +92,7 @@ body {
   font: inherit;
   font-size: 13px;
   cursor: pointer;
+  white-space: nowrap;
 }
 
 .app-nav__btn:hover {
@@ -110,6 +114,44 @@ body {
   font-size: 12px;
 }
 
+.app-nav__icon {
+  display: none;
+  font-size: 14px;
+}
+
+.app-nav__label {
+  display: inline;
+}
+
+.app-nav__label--short {
+  display: none;
+}
+
+@media (max-width: 900px) {
+  .app-nav__links {
+    gap: 6px;
+  }
+
+  .app-nav__btn {
+    height: 30px;
+    padding: 0 10px;
+    gap: 6px;
+    font-size: 12px;
+  }
+
+  .app-nav__icon {
+    display: inline-flex;
+  }
+
+  .app-nav__label {
+    display: none;
+  }
+
+  .app-nav__label--short {
+    display: inline;
+  }
+}
+
 @media (max-width: 720px) {
   .app-nav {
     grid-template-columns: 1fr auto;
@@ -120,6 +162,33 @@ body {
   }
   .app-nav__theme {
     margin-top: 0;
+  }
+}
+
+@media (max-width: 620px) {
+  .app-nav__links {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .app-nav__btn {
+    min-width: 38px;
+    padding: 0 8px;
+    gap: 0;
+    justify-content: center;
+  }
+
+  .app-nav__label {
+    display: none;
+  }
+
+  .app-nav__label--short {
+    display: none;
+  }
+
+  .app-nav__icon {
+    display: inline-flex;
+    font-size: 16px;
   }
 }
 
@@ -192,6 +261,23 @@ body {
   box-sizing: border-box;
 }
 
+.topbar button {
+  gap: 6px;
+}
+
+.topbar__icon {
+  display: none;
+  font-size: 14px;
+}
+
+.topbar__label {
+  display: inline;
+}
+
+.topbar__label--short {
+  display: none;
+}
+
 .topbar input[type="url"] {
   width: 100%;
   min-width: 0;
@@ -207,6 +293,55 @@ body {
 .topbar button:hover { border-color: var(--acc1); }
 #validateManifest {
   display: none;
+}
+
+@media (max-width: 900px) {
+  .topbar .right {
+    gap: 6px;
+  }
+
+  .topbar .right button {
+    padding: 0 10px;
+    gap: 6px;
+    font-size: 12px;
+  }
+
+  .topbar__icon {
+    display: inline-flex;
+  }
+
+  .topbar__label {
+    display: none;
+  }
+
+  .topbar__label--short {
+    display: inline;
+  }
+}
+
+@media (max-width: 620px) {
+  .topbar .right {
+    gap: 6px;
+  }
+
+  .topbar .right button {
+    min-width: 40px;
+    padding: 0 8px;
+    gap: 4px;
+  }
+
+  .topbar__label {
+    display: none;
+  }
+
+  .topbar__label--short {
+    display: inline;
+  }
+
+  .topbar__icon {
+    display: inline-flex;
+    font-size: 15px;
+  }
 }
 
 main {

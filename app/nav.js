@@ -1,9 +1,9 @@
 (function initNav(){
   const links = [
-    { dest: 'viewer', label: 'Manifest Inspector' },
-    { dest: 'diff', label: 'Manifest Difference Viewer' },
-    { dest: 'compat', label: 'Browser Compatibility Checker' },
-    { dest: 'probe', label: 'Segment Timeline Viewer' },
+    { dest: 'viewer', label: 'Manifest Inspector', shortLabel: 'Inspector', icon: '🔍' },
+    { dest: 'diff', label: 'Manifest Difference Viewer', shortLabel: 'Diff', icon: '⇄' },
+    { dest: 'compat', label: 'Browser Compatibility Checker', shortLabel: 'Compat', icon: '✓' },
+    { dest: 'probe', label: 'Segment Timeline Viewer', shortLabel: 'Timeline', icon: '⏱' },
   ];
 
   const page = (document.body && document.body.dataset && document.body.dataset.page) || '';
@@ -28,12 +28,31 @@
 
     const linksWrap = document.createElement('div');
     linksWrap.className = 'app-nav__links';
-    links.forEach(({ dest, label }) => {
+    links.forEach(({ dest, label, shortLabel, icon }) => {
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'app-nav__btn';
       btn.dataset.dest = dest;
-      btn.textContent = label;
+      btn.title = label;
+      btn.setAttribute('aria-label', label);
+
+      if (icon) {
+        const iconSpan = document.createElement('span');
+        iconSpan.className = 'app-nav__icon';
+        iconSpan.textContent = icon;
+        btn.appendChild(iconSpan);
+      }
+
+      const labelSpan = document.createElement('span');
+      labelSpan.className = 'app-nav__label';
+      labelSpan.textContent = label;
+      btn.appendChild(labelSpan);
+
+      const shortLabelSpan = document.createElement('span');
+      shortLabelSpan.className = 'app-nav__label app-nav__label--short';
+      shortLabelSpan.textContent = shortLabel || label;
+      btn.appendChild(shortLabelSpan);
+
       linksWrap.appendChild(btn);
     });
     navEl.appendChild(linksWrap);
