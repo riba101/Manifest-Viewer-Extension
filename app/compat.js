@@ -12,6 +12,10 @@
   const toggleThemeBtn = $('toggleTheme');
 
   const RESULTS = { env: {}, codecs: [], mse: [], mediaCapabilities: {}, drmMatrix: [] };
+  const HTML_MEDIA = {
+    video: typeof document !== 'undefined' ? document.createElement('video') : null,
+    audio: typeof document !== 'undefined' ? document.createElement('audio') : null
+  };
   let manifestVersion = '';
   // Toggle to suppress MediaCapabilities.decodingInfo for all codecs
 
@@ -142,6 +146,7 @@
     if (!s) return false;
     if (/Failed to parse\s+(audio|video)\s+contentType/i.test(s)) return true;
     if (/Invalid \(ambiguous\)\s+(audio|video)\s+codec string/i.test(s)) return true;
+    if (/robustness level be specified/i.test(s)) return true;
     if (/MediaKeySystemAccess/i.test(s)) return true;
     if (/key\s*system/i.test(s) && /not supported|unsupported|no key system|denied|unavailable/i.test(s)) return true;
     return false;
@@ -160,22 +165,40 @@
     }
   }
 
+  function htmlCanPlay(kind, contentType) {
+    const el = kind === 'audio' ? HTML_MEDIA.audio : HTML_MEDIA.video;
+    if (!el || typeof el.canPlayType !== 'function') return 'maybe';
+    try {
+      return el.canPlayType(contentType) || '';
+    } catch {
+      return '';
+    }
+  }
+
+  function canParseMediaContentType(kind, contentType) {
+    const hint = htmlCanPlay(kind, contentType);
+    return hint !== '';
+  }
+
   // Probe best-effort HDCP level using EME policy checks (Widevine/PlayReady/WisePlay)
   async function detectHdcpLevel() {
     if (!navigator.requestMediaKeySystemAccess) return null;
     return withCompatConsoleSilenced(async () => {
       const systems = ['com.widevine.alpha', 'com.microsoft.playready', 'com.huawei.wiseplay'];
       const versions = ['2.3', '2.2', '2.1', '2.0', '1.4', '1.0'];
-      const base = {
-        initDataTypes: ['cenc', 'keyids'],
-        distinctiveIdentifier: 'not-allowed',
-        persistentState: 'optional',
-        sessionTypes: ['temporary'],
-        videoCapabilities: [{ contentType: 'video/mp4; codecs="avc1.42E01E"' }]
-      };
 
       for (const ks of systems) {
         try {
+          const cap = { contentType: 'video/mp4; codecs="avc1.42E01E"' };
+          const robustness = pickDefaultRobustness(ks);
+          if (robustness) cap.robustness = robustness;
+          const base = {
+            initDataTypes: ['cenc', 'keyids'],
+            distinctiveIdentifier: 'not-allowed',
+            persistentState: 'optional',
+            sessionTypes: ['temporary'],
+            videoCapabilities: [cap]
+          };
           const access = await navigator.requestMediaKeySystemAccess(ks, [base]);
           if (!access) continue;
           const keys = await access.createMediaKeys();
@@ -299,11 +322,12 @@
       tr.appendChild(htmlCell);
       tr.appendChild(td(pill(r.mse === true ? true : r.mse === false ? false : null)));
       const mcCell = document.createElement('td');
-      if (r.mc) {
-        const label = r.mc.supported ? (r.mc.powerEfficient ? 'Yes (efficient)' : 'Yes') : 'No';
-        mcCell.appendChild(pill(r.mc.supported, label));
-      } else {
+      if (r.mc === null) {
         mcCell.appendChild(pill(null, 'n/a'));
+      } else {
+        const mcData = r.mc || { supported: false };
+        const label = mcData.supported ? (mcData.powerEfficient ? 'Yes (efficient)' : 'Yes') : 'No';
+        mcCell.appendChild(pill(mcData.supported, label));
       }
       tr.appendChild(mcCell);
       tb.appendChild(tr);
@@ -316,24 +340,21 @@
 
   async function testCodecs() {
     return withCompatConsoleSilenced(async () => {
-      const v = document.createElement('video');
-      const a = document.createElement('audio');
       const hasMSE = typeof window.MediaSource !== 'undefined';
       const mc = navigator.mediaCapabilities;
 
       const rows = [];
 
       async function check(entry, kind) {
-        const res = { key: entry.key, label: entry.label, contentType: entry.contentType, kind, html: '""', mse: false, mc: null };
+        const res = { key: entry.key, label: entry.label, contentType: entry.contentType, kind, html: '', mse: false, mc: null };
+        const html = htmlCanPlay(kind, entry.contentType);
+        res.html = html; // '', 'maybe', 'probably'
+        const canParse = html !== '';
         try {
-          const can = (kind === 'video' ? v.canPlayType(entry.contentType) : a.canPlayType(entry.contentType)) || '';
-          res.html = can; // '', 'maybe', 'probably'
-        } catch {}
-        try {
-          res.mse = hasMSE && MediaSource.isTypeSupported(entry.contentType);
+          res.mse = canParse && hasMSE && MediaSource.isTypeSupported(entry.contentType);
         } catch { res.mse = false; }
         try {
-          if (mc && typeof mc.decodingInfo === 'function') {
+          if (canParse && mc && typeof mc.decodingInfo === 'function') {
             const isVideo = kind === 'video';
             const cfg = isVideo ? {
               type: 'file',
@@ -350,8 +371,10 @@
             };
             const info = await mcDecodingInfoQuiet(mc, cfg);
             res.mc = { supported: !!info.supported, smooth: !!info.smooth, powerEfficient: !!info.powerEfficient };
+          } else if (!canParse) {
+            res.mc = { supported: false, smooth: false, powerEfficient: false };
           }
-        } catch { res.mc = null; }
+        } catch { res.mc = { supported: false, smooth: false, powerEfficient: false }; }
         rows.push(res);
       }
 
@@ -382,6 +405,15 @@
   };
   const ENCRYPTION_SCHEMES = ['cenc', 'cbcs'];
 
+  function pickDefaultRobustness(keySystem) {
+    const levels = ROBUSTNESS[keySystem];
+    if (!levels || !levels.length) return '';
+    for (let i = levels.length - 1; i >= 0; i -= 1) {
+      if (levels[i]) return levels[i];
+    }
+    return '';
+  }
+
   const DRM_CODECS = [
     // Video codecs
     { id: 'avc',    label: 'avc1',       kind: 'video', contentType: 'video/mp4; codecs="avc1.640028"', initDataTypes: ['cenc','keyids'] },
@@ -401,10 +433,15 @@
 
       for (const codec of DRM_CODECS) {
         const row = { codecId: codec.id, label: codec.label, keySystems: {} };
+        const canParse = canParseMediaContentType(codec.kind, codec.contentType);
 
         for (const ks of KEY_SYSTEMS) {
           if (!hasEME) {
             row.keySystems[ks.id] = { supported: false, error: 'EME not available', schemes: {} };
+            continue;
+          }
+          if (!canParse) {
+            row.keySystems[ks.id] = { supported: false, error: 'Skipped: contentType not recognized by this browser', schemes: {} };
             continue;
           }
           try {
@@ -429,7 +466,8 @@
 
               for (const rlevel of levels) {
                 const cap = { contentType: codec.contentType, encryptionScheme: scheme };
-                if (rlevel) cap.robustness = rlevel;
+                const robustness = rlevel || pickDefaultRobustness(ks.id);
+                if (robustness) cap.robustness = robustness;
                 const cfg = codec.kind === 'video'
                   ? { ...base, videoCapabilities: [ cap ] }
                   : { ...base, audioCapabilities: [ cap ] };
@@ -465,7 +503,8 @@
               let defaultSupported = false;
               for (const rlevel of levels) {
                 const cap = { contentType: codec.contentType };
-                if (rlevel) cap.robustness = rlevel;
+                const robustness = rlevel || pickDefaultRobustness(ks.id);
+                if (robustness) cap.robustness = robustness;
                 const cfg = codec.kind === 'video'
                   ? { ...base, videoCapabilities: [ cap ] }
                   : { ...base, audioCapabilities: [ cap ] };
@@ -1021,23 +1060,20 @@
       }
 
       // HTML5 canPlayType
-      let html = '';
-      try {
-        const el = kind === 'video' ? document.createElement('video') : document.createElement('audio');
-        html = el.canPlayType(ct) || '';
-      } catch {}
+      const html = htmlCanPlay(kind, ct);
+      const canParse = html !== '';
 
       // MSE isTypeSupported
       let mse = false;
       try {
-        mse = typeof window.MediaSource !== 'undefined' && MediaSource.isTypeSupported(ct);
+        mse = canParse && typeof window.MediaSource !== 'undefined' && MediaSource.isTypeSupported(ct);
       } catch { mse = false; }
 
       // MediaCapabilities decodingInfo
       let mc = null;
       try {
         const mcApi = navigator.mediaCapabilities;
-        if (mcApi && typeof mcApi.decodingInfo === 'function') {
+        if (canParse && mcApi && typeof mcApi.decodingInfo === 'function') {
           const cfg = kind === 'video' ? {
             type: 'file',
             video: {
@@ -1053,6 +1089,8 @@
           };
           const info = await mcDecodingInfoQuiet(mcApi, cfg);
           mc = { supported: !!info.supported, smooth: !!info.smooth, powerEfficient: !!info.powerEfficient };
+        } else if (!canParse) {
+          mc = { supported: false, smooth: false, powerEfficient: false };
         }
       } catch {
         mc = { supported: false, smooth: false, powerEfficient: false };
@@ -1063,6 +1101,10 @@
       const hasEME = !!navigator.requestMediaKeySystemAccess;
       if (hasEME) {
         for (const ks of KEY_SYSTEMS) {
+          if (!canParse) {
+            ksResults[ks.id] = { supported: false, bestRobustness: null, attempts: [] };
+            continue;
+          }
           const levels = (ROBUSTNESS && ROBUSTNESS[ks.id]) || [''];
           const attempts = [];
           let best = null;
@@ -1075,7 +1117,8 @@
                 sessionTypes: ['temporary']
               };
               const cap = { contentType: ct };
-              if (rlevel) cap.robustness = rlevel;
+              const robustness = rlevel || pickDefaultRobustness(ks.id);
+              if (robustness) cap.robustness = robustness;
               const cfg = kind === 'video'
                 ? { ...base, videoCapabilities: [ cap ] }
                 : { ...base, audioCapabilities: [ cap ] };

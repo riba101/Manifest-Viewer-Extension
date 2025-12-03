@@ -42,8 +42,22 @@
         font: inherit;
         font-size: 13px;
         cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
       }
       .compat-topbar button:hover { border-color: var(--acc1); }
+
+      .compat-topbar__icon {
+        display: none;
+        font-size: 14px;
+      }
+      .compat-topbar__label {
+        display: inline;
+      }
+      .compat-topbar__label--short {
+        display: none;
+      }
 
       main.compat {
         padding: 8px 8px 20px;
@@ -117,12 +131,22 @@
         .compat-topbar .spacer { display: none; }
         .compat-topbar button {
           height: 34px;
+          gap: 6px;
         }
         main.compat {
           padding: 8px;
           width: 100%;
           max-width: 100%;
           gap: 10px;
+        }
+        .compat-topbar__icon {
+          display: inline-flex;
+        }
+        .compat-topbar__label {
+          display: none;
+        }
+        .compat-topbar__label--short {
+          display: inline;
         }
         .kv {
           grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
@@ -173,9 +197,21 @@
     <header class="compat-topbar">
       <strong>Compatibility Check</strong>
       <span class="spacer"></span>
-      <button id="runChecks">Run Checks</button>
-      <button id="downloadJson" title="Download report JSON file">Download JSON</button>
-      <button id="uploadJson" title="Load report JSON file">Upload JSON</button>
+      <button id="runChecks" aria-label="Run checks">
+        <span class="compat-topbar__icon" aria-hidden="true">▶</span>
+        <span class="compat-topbar__label">Run Checks</span>
+        <span class="compat-topbar__label compat-topbar__label--short">Run</span>
+      </button>
+      <button id="downloadJson" title="Download report JSON file" aria-label="Download report JSON file">
+        <span class="compat-topbar__icon" aria-hidden="true">⬇</span>
+        <span class="compat-topbar__label">Download JSON</span>
+        <span class="compat-topbar__label compat-topbar__label--short">Download</span>
+      </button>
+      <button id="uploadJson" title="Load report JSON file" aria-label="Load report JSON file">
+        <span class="compat-topbar__icon" aria-hidden="true">⬆</span>
+        <span class="compat-topbar__label">Upload JSON</span>
+        <span class="compat-topbar__label compat-topbar__label--short">Upload</span>
+      </button>
       <input id="uploadJsonInput" type="file" accept="application/json" style="display:none" />
     </header>
 
