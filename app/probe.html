@@ -84,6 +84,16 @@
       .note { color: var(--muted); font-size: 12px; }
       .small { font-size: 11px; color: var(--muted); }
       .code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
+      .btn-reset {
+        border: 1px solid var(--border);
+        background: var(--bg);
+        color: var(--text);
+        border-radius: 8px;
+        padding: 4px 8px;
+        font-size: 11px;
+        cursor: pointer;
+      }
+      .btn-reset:hover { border-color: var(--acc1); }
 
       .timeline {
         position: relative;
@@ -121,6 +131,7 @@
         background: rgba(138,180,248,.35);
         border: 1px solid rgba(138,180,248,.6);
         border-radius: 4px;
+        cursor: pointer;
       }
       .timeline .gap {
         position: absolute;
@@ -136,6 +147,49 @@
         color: var(--muted);
         white-space: nowrap;
       }
+      .timeline .playhead {
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        width: 1px;
+        background: var(--acc1);
+        box-shadow: 0 0 0 1px rgba(0,0,0,.2);
+        pointer-events: none;
+        z-index: 2;
+      }
+      .timeline .playhead-label {
+        position: absolute;
+        top: 2px;
+        transform: translateX(-50%);
+        padding: 2px 6px;
+        border-radius: 6px;
+        background: rgba(0,0,0,.55);
+        color: var(--text);
+        pointer-events: none;
+        white-space: nowrap;
+        z-index: 3;
+      }
+      .timeline .selection-box {
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        background: rgba(138,180,248,.15);
+        border: 1px dashed var(--acc1);
+        pointer-events: none;
+        z-index: 1;
+      }
+      .timeline .segment-popover {
+        position: absolute;
+        max-width: 260px;
+        padding: 8px 10px;
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        box-shadow: 0 8px 20px rgba(0,0,0,.3);
+        z-index: 4;
+        pointer-events: auto;
+      }
+      .timeline .segment-popover a { color: var(--acc1); }
 
       table.matrix { width:100%; border-collapse: collapse; font-size: 12px; }
       table.matrix th, table.matrix td {
@@ -178,8 +232,9 @@
         <div class="note" style="margin-bottom:8px">Displays segment durations and gaps; live windows are shown with availability range if reported.</div>
         <div class="small" style="margin-bottom:8px; display:flex; align-items:center; gap:8px;">
           <label for="timelineZoom" style="font-size:12px;">Zoom</label>
-          <input id="timelineZoom" type="range" min="0" max="100" step="1" value="0" title="0 = fit timeline, 100 = show about two segments" style="flex:1; accent-color: var(--acc1);" />
+          <input id="timelineZoom" type="range" min="0" max="100" step="1" value="0" title="0 = fit timeline, 100 = show 1 second" style="flex:1; accent-color: var(--acc1);" />
           <span id="timelineZoomValue">Fit</span>
+          <button id="timelineZoomReset" type="button" class="btn-reset">Reset</button>
         </div>
         <div id="timelineWrapper" class="timeline"></div>
         <div id="timelineMeta" class="small" style="margin-top:6px;"></div>

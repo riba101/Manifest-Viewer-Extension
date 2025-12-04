@@ -3587,6 +3587,18 @@ function formatDetailDisplay(value) {
 }
 
 // Attempt to restore previous viewer state when returning from Compatibility page
+(function restoreSegmentInspect() {
+  try {
+    const raw = sessionStorage.getItem('mv_inspect_segment');
+    if (!raw) return;
+    sessionStorage.removeItem('mv_inspect_segment');
+    const data = JSON.parse(raw);
+    if (!data || !data.url) return;
+    if (urlInput) urlInput.value = data.url;
+    if (modeSelect) modeSelect.value = typeof data.mode === 'string' ? data.mode : 'segments';
+  } catch {}
+})();
+
 (function restoreFromCompat() {
   try {
     const raw = sessionStorage.getItem('mv_return_state');

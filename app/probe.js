@@ -9,11 +9,44 @@
   const segmentsTable = $('segmentsTable');
   const timelineZoomInput = $('timelineZoom');
   const timelineZoomValue = $('timelineZoomValue');
+  const timelineZoomReset = $('timelineZoomReset');
   const toggleThemeBtn = $('toggleTheme');
   const backBtn = $('back');
   let timelineZoom = 0;
   let lastTimelineSegments = null;
   let lastTimelineMeta = null;
+  let lastTimelineView = null; // remembers current scale and start for scroll-preserving zoom
+  let playheadEl = null;
+  let playheadLabel = null;
+  let selectionEl = null;
+  let segmentInfoEl = null;
+  let selectionActive = false;
+  let selectionStartPx = 0;
+  let selectionEndPx = 0;
+  let pendingCenterTime = null; // set during drag-to-zoom to override preserve center
+  let suppressNextClick = false; // ignore bar click right after drag-zoom
+
+  function inspectSegmentInViewer(seg) {
+    if (!seg || !seg.uri) return;
+    try {
+      sessionStorage.setItem(
+        'mv_inspect_segment',
+        JSON.stringify({
+          url: seg.uri,
+          mode: 'segments',
+          track: seg.track || '',
+          number: seg.number || null
+        })
+      );
+    } catch {}
+    const isExt = typeof chrome !== 'undefined' && chrome.runtime && typeof chrome.runtime.getURL === 'function';
+    const page = isExt ? chrome.runtime.getURL('viewer.html') : 'viewer.html';
+    try {
+      window.location.href = page;
+    } catch {
+      try { window.open(page, '_self'); } catch {}
+    }
+  }
 
   function setTheme(theme) {
     const html = document.documentElement;
@@ -45,7 +78,7 @@
     const next = Math.min(100, Math.max(0, Number.isFinite(parsed) ? parsed : (timelineZoom || 50)));
     timelineZoom = next;
     if (timelineZoomInput) timelineZoomInput.value = String(next);
-    if (timelineZoomValue) timelineZoomValue.textContent = next === 0 ? 'Fit' : next === 100 ? '2 segments' : `${next}%`;
+    if (timelineZoomValue) timelineZoomValue.textContent = next === 0 ? 'Fit' : next === 100 ? '1s' : `${next}%`;
     if (lastTimelineSegments) renderTimeline(lastTimelineSegments, lastTimelineMeta);
   }
 
@@ -471,7 +504,8 @@
       return {
         left,
         width,
-        label: `#${s.number} (${(s.duration || 0).toFixed(3)}s)`
+        label: `#${s.number} (${(s.duration || 0).toFixed(3)}s)`,
+        seg: s
       };
     });
     const gaps = [];
@@ -498,6 +532,22 @@ function renderTimeline(segments, meta) {
     timelineMeta.textContent = '';
     return;
   }
+  const forcedCenter = pendingCenterTime;
+  pendingCenterTime = null;
+  const prevView = lastTimelineView;
+  const viewportWidth = (
+    timelineEl.clientWidth
+    || timelineEl.offsetWidth
+    || (timelineEl.parentElement ? timelineEl.parentElement.clientWidth : 0)
+    || 0
+  );
+  const preserveTime = (() => {
+    if (Number.isFinite(forcedCenter)) return forcedCenter;
+    if (!prevView || !viewportWidth) return null;
+    if (!Number.isFinite(prevView.pxPerSecond) || prevView.pxPerSecond <= 0) return null;
+    const currentCenterPx = (timelineEl.scrollLeft || 0) + viewportWidth / 2;
+    return prevView.globalStart + currentCenterPx / prevView.pxPerSecond;
+  })();
   const cdnGroups = segments.reduce((map, seg) => {
     const cdnKey = seg.cdnLabel || seg.cdnUrl || 'Default';
     if (!map.has(cdnKey)) map.set(cdnKey, { order: seg.cdnOrder || 0, tracks: new Map() });
@@ -524,19 +574,8 @@ function renderTimeline(segments, meta) {
     || (timelineEl.parentElement ? timelineEl.parentElement.clientWidth : 0)
     || 0
   );
-  const durations = segments
-    .map((s) => s.duration)
-    .filter((d) => Number.isFinite(d) && d > 0)
-    .sort((a, b) => a - b);
-  const mid = durations.length ? Math.floor(durations.length / 2) : 0;
-  const medianDuration = durations.length
-    ? (durations.length % 2 ? durations[mid] : (durations[mid - 1] + durations[mid]) / 2)
-    : 0;
-  const fallbackDuration = spanSeconds / Math.max(segments.length, 1);
-  const typicalDuration = medianDuration || fallbackDuration || 1;
   const minScale = wrapperWidth / spanSeconds;
-  const maxScale = typicalDuration > 0 ? wrapperWidth / (typicalDuration * 2) : minScale;
-  const scaleHi = Math.max(minScale, maxScale);
+  const scaleHi = Math.max(minScale, wrapperWidth); // zoom all the way to a 1s view
   const zoomPct = Math.min(1, Math.max(0, (timelineZoom || 0) / 100));
   const pxPerSecond = minScale + (scaleHi - minScale) * zoomPct;
   const innerWidth = Math.max(wrapperWidth, spanSeconds * pxPerSecond);
@@ -558,6 +597,49 @@ function renderTimeline(segments, meta) {
   inner.appendChild(ticks);
 
   const metaParts = [];
+  const showSegmentInfo = (seg, posX, posY) => {
+    if (!segmentInfoEl || !seg) return;
+    segmentInfoEl.innerHTML = '';
+    const title = document.createElement('div');
+    title.textContent = `Segment #${seg.number ?? ''}`;
+    const dur = document.createElement('div');
+    dur.textContent = `Duration: ${Number.isFinite(seg.duration) ? `${seg.duration.toFixed(3)}s` : 'n/a'}`;
+    const start = document.createElement('div');
+    start.textContent = `Start: ${Number.isFinite(seg.start) ? `${seg.start.toFixed(3)}s` : 'n/a'}`;
+    segmentInfoEl.appendChild(title);
+    segmentInfoEl.appendChild(dur);
+    segmentInfoEl.appendChild(start);
+    if (seg.track) {
+      const track = document.createElement('div');
+      track.textContent = `Track: ${seg.track}`;
+      segmentInfoEl.appendChild(track);
+    }
+    if (seg.cdnLabel) {
+      const cdn = document.createElement('div');
+      cdn.textContent = `CDN: ${seg.cdnLabel}`;
+      segmentInfoEl.appendChild(cdn);
+    }
+    if (seg.uri) {
+      const link = document.createElement('a');
+      link.href = seg.uri;
+      link.rel = 'noopener noreferrer';
+      link.textContent = 'Inspect segment';
+      link.style.display = 'inline-block';
+      link.style.marginTop = '4px';
+      link.addEventListener('click', (e) => {
+        if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+        e.preventDefault();
+        e.stopPropagation();
+        inspectSegmentInViewer(seg);
+      });
+      segmentInfoEl.appendChild(link);
+    }
+    const maxLeft = Math.max(0, innerWidth - 260);
+    segmentInfoEl.style.left = `${Math.max(0, Math.min(maxLeft, posX - 8))}px`;
+    const maxTop = Math.max(0, (inner.scrollHeight || 0) - 120);
+    segmentInfoEl.style.top = `${Math.max(0, Math.min(maxTop, posY - 12))}px`;
+    segmentInfoEl.style.display = 'block';
+  };
   orderedCdn.forEach(([cdnLabel, group]) => {
     const details = document.createElement('details');
     details.open = true;
@@ -599,6 +681,19 @@ function renderTimeline(segments, meta) {
         div.style.background = useAlt ? altBg : baseBg;
         div.style.borderColor = useAlt ? altBorder : baseBorder;
         div.title = bar.label;
+        if (bar.seg) {
+          div.dataset.number = bar.seg.number;
+          div.addEventListener('click', (e) => {
+            if (suppressNextClick) { suppressNextClick = false; return; }
+            e.stopPropagation();
+            const timelineRect = timelineEl.getBoundingClientRect();
+            const barRect = div.getBoundingClientRect();
+            const posX = (timelineEl.scrollLeft || 0) + (e.clientX - timelineRect.left);
+            const posY = (timelineEl.scrollTop || 0) + (barRect.top - timelineRect.top);
+            if (selectionEl) selectionEl.style.display = 'none';
+            showSegmentInfo(bar.seg, posX, posY);
+          });
+        }
         wrapper.appendChild(div);
       });
       tl.gaps.forEach((gap) => {
@@ -617,6 +712,34 @@ function renderTimeline(segments, meta) {
   });
 
   timelineEl.appendChild(inner);
+  lastTimelineView = { pxPerSecond, globalStart, spanSeconds, innerWidth };
+  if (preserveTime !== null) {
+    const target = (preserveTime - globalStart) * pxPerSecond - viewportWidth / 2;
+    const maxScroll = Math.max(0, innerWidth - viewportWidth);
+    timelineEl.scrollLeft = Math.min(maxScroll, Math.max(0, target));
+  } else {
+    const maxScroll = Math.max(0, innerWidth - viewportWidth);
+    if (timelineEl.scrollLeft > maxScroll) timelineEl.scrollLeft = maxScroll;
+  }
+
+  // Playhead / guideline for alignment while hovering
+  playheadEl = document.createElement('div');
+  playheadEl.className = 'playhead';
+  playheadEl.style.display = 'none';
+  playheadLabel = document.createElement('div');
+  playheadLabel.className = 'playhead-label small';
+  playheadLabel.style.display = 'none';
+  selectionEl = document.createElement('div');
+  selectionEl.className = 'selection-box';
+  selectionEl.style.display = 'none';
+  segmentInfoEl = document.createElement('div');
+  segmentInfoEl.className = 'segment-popover small';
+  segmentInfoEl.style.display = 'none';
+  inner.appendChild(playheadEl);
+  inner.appendChild(playheadLabel);
+  inner.appendChild(selectionEl);
+  inner.appendChild(segmentInfoEl);
+
   const availabilityText = meta && meta.availability ? ` · Availability: ${meta.availability}` : '';
   timelineMeta.textContent = `${metaParts.join(' | ')}${availabilityText}`;
 }
@@ -809,6 +932,88 @@ function renderTimeline(segments, meta) {
   if (timelineZoomInput) {
     timelineZoomInput.addEventListener('input', (e) => setZoom(e.target.value));
     setZoom(timelineZoomInput.value || 0);
+  }
+  if (timelineZoomReset) {
+    timelineZoomReset.addEventListener('click', () => setZoom(0));
+  }
+  if (timelineEl) {
+    const getTimelineX = (clientX) => {
+      if (!lastTimelineView) return 0;
+      const rect = timelineEl.getBoundingClientRect();
+      const raw = (timelineEl.scrollLeft || 0) + (clientX - rect.left);
+      const maxX = lastTimelineView.innerWidth || 0;
+      return Math.max(0, Math.min(raw, maxX));
+    };
+    const updatePlayhead = (clientX) => {
+      if (!playheadEl || !playheadLabel || !lastTimelineView) return;
+      const rect = timelineEl.getBoundingClientRect();
+      const rawX = (timelineEl.scrollLeft || 0) + (clientX - rect.left);
+      const clampedX = Math.max(0, Math.min(rawX, (lastTimelineView.innerWidth || 0)));
+      const timeSec = lastTimelineView.globalStart + clampedX / lastTimelineView.pxPerSecond;
+      playheadEl.style.left = `${clampedX}px`;
+      playheadEl.style.display = 'block';
+      playheadLabel.style.left = `${clampedX}px`;
+      playheadLabel.textContent = `${timeSec.toFixed(3)}s`;
+      playheadLabel.style.display = 'block';
+    };
+    timelineEl.addEventListener('mousedown', (e) => {
+      if (e.button !== 0) return;
+      if (!lastTimelineView) return;
+      e.preventDefault();
+      if (segmentInfoEl && e.target && e.target.closest('.segment-popover')) return;
+      if (segmentInfoEl) segmentInfoEl.style.display = 'none';
+      selectionActive = true;
+      selectionStartPx = getTimelineX(e.clientX);
+      selectionEndPx = selectionStartPx;
+      if (selectionEl) {
+        selectionEl.style.display = 'block';
+        selectionEl.style.left = `${selectionStartPx}px`;
+        selectionEl.style.width = '0px';
+      }
+    });
+    timelineEl.addEventListener('mousemove', (e) => {
+      updatePlayhead(e.clientX);
+      if (!selectionActive || !selectionEl || !lastTimelineView) return;
+      selectionEndPx = getTimelineX(e.clientX);
+      const left = Math.min(selectionStartPx, selectionEndPx);
+      const width = Math.max(0, Math.abs(selectionEndPx - selectionStartPx));
+      selectionEl.style.display = 'block';
+      selectionEl.style.left = `${left}px`;
+      selectionEl.style.width = `${width}px`;
+    });
+    timelineEl.addEventListener('mouseleave', () => {
+      if (playheadEl) playheadEl.style.display = 'none';
+      if (playheadLabel) playheadLabel.style.display = 'none';
+      if (segmentInfoEl) segmentInfoEl.style.display = 'none';
+    });
+    window.addEventListener('mouseup', () => {
+      if (!selectionActive) return;
+      selectionActive = false;
+      if (selectionEl) selectionEl.style.display = 'none';
+      if (!lastTimelineView) return;
+      const startPx = Math.min(selectionStartPx, selectionEndPx);
+      const endPx = Math.max(selectionStartPx, selectionEndPx);
+      const spanPx = endPx - startPx;
+      if (spanPx < 6) return; // ignore tiny drags
+      const regionSpan = spanPx / lastTimelineView.pxPerSecond;
+      if (regionSpan <= 0) return;
+      const viewport = (
+        timelineEl.clientWidth
+        || timelineEl.offsetWidth
+        || (timelineEl.parentElement ? timelineEl.parentElement.clientWidth : 0)
+        || 0
+      );
+      if (!viewport) return;
+      const wrapperWidth = Math.max(320, viewport);
+      const minScale = wrapperWidth / (lastTimelineView.spanSeconds || regionSpan);
+      const scaleHi = Math.max(minScale, wrapperWidth);
+      const targetPxPerSecond = Math.max(minScale, Math.min(scaleHi, wrapperWidth / regionSpan));
+      const zoomPct = scaleHi === minScale ? 0 : (targetPxPerSecond - minScale) / (scaleHi - minScale);
+      const centerPx = startPx + spanPx / 2;
+      pendingCenterTime = lastTimelineView.globalStart + centerPx / lastTimelineView.pxPerSecond;
+      suppressNextClick = true;
+      setZoom(zoomPct * 100);
+    });
   }
   if (backBtn) {
     backBtn.addEventListener('click', () => {
