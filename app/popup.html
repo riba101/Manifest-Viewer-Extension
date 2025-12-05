@@ -27,7 +27,7 @@
       }
       .row { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; }
       label { font-size: 12px; color: var(--muted); }
-      input[type=url], input[type=text] {
+      input[type=url], input[type=text], select {
         flex: 1;
         padding: 10px 12px;
         border: 1px solid var(--border);
@@ -56,6 +56,13 @@
       <button id="open">Open</button>
       <button id="compat" title="Open codec/DRM compatibility checker">Compatibility</button>
       <!-- <button id="openHeaders" title="Open viewer and configure headers">Custom Headers</button> -->
+    </div>
+
+    <div class="row" id="tabManifestRow">
+      <select id="tabManifestSelect" aria-label="Manifests detected on this tab">
+        <option>Scanning current tab for manifests...</option>
+      </select>
+      <button id="openTabManifest" title="Open selected manifest in the viewer">Open</button>
     </div>
 
     <div class="row">

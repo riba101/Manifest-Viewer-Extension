@@ -48,6 +48,7 @@ const initialUrlParam = params.get('u') || params.get('url'); // prefer legacy ?
 if (initialUrlParam) urlInput.value = initialUrlParam;
 if (params.get('ua')) uaInput.value = params.get('ua');
 if (uaInput && !uaInput.value) uaInput.value = navigator.userAgent || '';
+const shouldAutoHeaders = params.get('autoHeaders') === '1';
 
 // Load default UA if not present
 if (uaInput && !uaInput.value) {
@@ -261,6 +262,63 @@ function setCustomHeaders(entries, options = {}) {
   }
   if (!silent && lastResponseMeta) {
     renderMeta(lastResponseMeta);
+  }
+}
+
+function mergePrefillHeaders(prefill = [], existing = []) {
+  const merged = [];
+  const byName = new Map();
+  const push = (h) => {
+    if (!h || !h.name) return;
+    const name = h.name.trim();
+    if (!name) return;
+    const lower = name.toLowerCase();
+    const value = typeof h.value === 'string' ? h.value : '';
+    if (!value && value !== '') return;
+    byName.set(lower, { name, value, enabled: h.enabled !== false });
+  };
+  (prefill || []).forEach(push);
+  (existing || []).forEach((h) => {
+    if (!h || !h.name) return;
+    const lower = h.name.toLowerCase();
+    if (byName.has(lower)) return;
+    push(h);
+  });
+  byName.forEach((val) => merged.push(val));
+  return merged;
+}
+
+async function prefillHeadersFromBackground(url) {
+  if (!shouldAutoHeaders) return;
+  if (!url) return;
+  if (typeof chrome === 'undefined' || !chrome.runtime || typeof chrome.runtime.sendMessage !== 'function') return;
+  try {
+    const headers = await new Promise((resolve) => {
+      chrome.runtime.sendMessage({ type: 'GET_MANIFEST_REQUEST_HEADERS', url }, (res) => {
+        if (chrome.runtime.lastError) {
+          resolve([]);
+          return;
+        }
+        if (res && res.ok && Array.isArray(res.headers)) {
+          resolve(res.headers);
+        } else {
+          resolve([]);
+        }
+      });
+    });
+    if (!headers || !headers.length) return;
+    const normalized = headers
+      .map((h) => ({
+        name: typeof h?.name === 'string' ? h.name : '',
+        value: typeof h?.value === 'string' ? h.value : '',
+        enabled: typeof h?.enabled === 'boolean' ? h.enabled : true,
+      }))
+      .filter((h) => h.name && h.value !== undefined);
+    if (!normalized.length) return;
+    const merged = mergePrefillHeaders(normalized, customHeaderEntries);
+    setCustomHeaders(merged, { persist: false, silent: true });
+  } catch {
+    // ignore
   }
 }
 
@@ -3654,8 +3712,14 @@ function formatDetailDisplay(value) {
   } catch {}
 })();
 
-// Auto-load if URL provided
-if (urlInput.value) load();
+// Auto-load if URL provided (prefill headers from detected request when available)
+(async () => {
+  const targetUrl = urlInput.value;
+  if (targetUrl) {
+    await prefillHeadersFromBackground(targetUrl);
+    load();
+  }
+})();
 
 
 (function loadVersion() {

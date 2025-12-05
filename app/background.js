@@ -434,6 +434,20 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       .catch((e) => sendResponse({ ok: false, error: e?.message || String(e) }));
     return true; // async response
   }
+  if (msg?.type === "GET_MANIFEST_REQUEST_HEADERS" && typeof msg.url === "string") {
+    const entry = findDetectionForUrl(msg.url);
+    const headers = entry && Array.isArray(entry.headers) ? entry.headers : [];
+    sendResponse({ ok: true, headers });
+    return true;
+  }
+  if (msg?.type === "GET_TAB_MANIFEST_DOWNLOADS") {
+    const tabId = typeof msg.tabId === "number" ? msg.tabId : null;
+    const pageUrl = typeof msg.pageUrl === "string" ? msg.pageUrl : "";
+    findManifestDownloadsForTab(tabId, pageUrl)
+      .then((downloads) => sendResponse({ ok: true, downloads }))
+      .catch((e) => sendResponse({ ok: false, error: e?.message || String(e) }));
+    return true;
+  }
   if (msg?.type === "GET_UA") {
     sendResponse({ ua: state.customUA || "" });
     return true;
@@ -467,6 +481,234 @@ function viewerUrlFor(u) {
 // Track tabs we've redirected to prevent loops
 const redirectingTabs = new Set();
 const handledDownloadIds = new Set();
+const manifestDetections = [];
+const MANIFEST_DETECTION_LIMIT = 50;
+
+function normalizeHeaders(headers) {
+  if (!Array.isArray(headers)) return [];
+  const seen = new Set();
+  const normalized = [];
+  headers.forEach((h) => {
+    const name = typeof h?.name === "string" ? h.name.trim() : "";
+    const value = typeof h?.value === "string" ? h.value : "";
+    if (!name || !value) return;
+    const lower = name.toLowerCase();
+    if (seen.has(lower)) return;
+    seen.add(lower);
+    normalized.push({ name, value });
+  });
+  return normalized;
+}
+
+function mergeHeaders(next = [], prev = []) {
+  if (!Array.isArray(next) || !next.length) return Array.isArray(prev) ? prev : [];
+  const byName = new Map();
+  (Array.isArray(prev) ? prev : []).forEach((h) => {
+    if (!h || !h.name) return;
+    byName.set(h.name.toLowerCase(), { name: h.name, value: h.value || "" });
+  });
+  next.forEach((h) => {
+    if (!h || !h.name) return;
+    byName.set(h.name.toLowerCase(), { name: h.name, value: h.value || "" });
+  });
+  return Array.from(byName.values()).filter((h) => h && h.name && h.value !== undefined);
+}
+
+function recordManifestDetection({
+  url = "",
+  tabId = -1,
+  source = "download",
+  mime = "",
+  startTime = "",
+  pageUrl = "",
+  headers = [],
+}) {
+  const normalizedUrl = typeof url === "string" ? url.trim() : "";
+  if (!normalizedUrl) return;
+  if (!looksLikeManifestUrl(normalizedUrl) && !looksLikeManifestMime(mime)) return;
+  const normalizedHeaders = normalizeHeaders(headers);
+
+  const entry = {
+    url: normalizedUrl,
+    tabId: typeof tabId === "number" ? tabId : -1,
+    source,
+    mime: mime || "",
+    startTime: startTime || "",
+    pageUrl: pageUrl || "",
+    headers: normalizedHeaders,
+  };
+
+  // Deduplicate by tab + URL, keeping newest first
+  const existingIdx = manifestDetections.findIndex((e) => e.url === entry.url && e.tabId === entry.tabId);
+  if (existingIdx >= 0) {
+    const prev = manifestDetections[existingIdx];
+    manifestDetections.splice(existingIdx, 1);
+    if (!entry.headers.length && prev?.headers?.length) {
+      entry.headers = prev.headers;
+    } else if (entry.headers.length && prev?.headers?.length) {
+      entry.headers = mergeHeaders(entry.headers, prev.headers);
+    }
+  }
+
+  manifestDetections.unshift(entry);
+  if (manifestDetections.length > MANIFEST_DETECTION_LIMIT) {
+    manifestDetections.length = MANIFEST_DETECTION_LIMIT;
+  }
+}
+
+function parseHost(u) {
+  try { return new URL(u).hostname || ""; } catch { return ""; }
+}
+
+function matchesTabOrHost(entry, tabId, host) {
+  if (!entry) return false;
+  const entryTab = typeof entry.tabId === "number" ? entry.tabId : -1;
+  if (typeof tabId === "number" && tabId >= 0 && entryTab === tabId) return true;
+
+  const entryHost = parseHost(entry.url);
+  if (host && entryHost && entryHost === host) return true;
+
+  const refHost = parseHost(entry.pageUrl || "");
+  if (host && refHost && refHost === host) return true;
+
+  return false;
+}
+
+function toTimestamp(str) {
+  const t = Date.parse(str || "");
+  if (Number.isFinite(t)) return t;
+  return 0;
+}
+
+function searchManifestDownloads(limit = 50) {
+  return new Promise((resolve) => {
+    try {
+      if (!chrome?.downloads?.search) {
+        resolve([]);
+        return;
+      }
+      chrome.downloads.search({ orderBy: ["-startTime"], limit }, (items) => {
+        resolve(Array.isArray(items) ? items : []);
+      });
+    } catch {
+      resolve([]);
+    }
+  });
+}
+
+async function findManifestDownloadsForTab(tabId, pageUrl) {
+  const host = parseHost(pageUrl || "");
+  const results = [];
+  const seen = new Set();
+  const add = (entry, source = "download") => {
+    if (!entry || !entry.url) return;
+    if (seen.has(entry.url)) return;
+    seen.add(entry.url);
+    results.push({
+      url: entry.url,
+      tabId: typeof entry.tabId === "number" ? entry.tabId : -1,
+      source,
+      startTime: entry.startTime || "",
+      mime: entry.mime || "",
+    });
+  };
+
+  manifestDetections.forEach((entry) => {
+    if (matchesTabOrHost(entry, tabId, host)) add(entry, entry.source || "detected");
+  });
+
+  const downloads = await searchManifestDownloads();
+  downloads.forEach((item) => {
+    const url = item?.finalUrl || item?.url || "";
+    if (!looksLikeManifestUrl(url) && !looksLikeManifestMime(item?.mime || "")) return;
+    if (!matchesTabOrHost({ url, tabId: item?.tabId, pageUrl: item?.referrer || item?.referrerUrl || "" }, tabId, host)) {
+      return;
+    }
+    add(
+      {
+        url,
+        tabId: typeof item?.tabId === "number" ? item.tabId : -1,
+        startTime: item?.startTime || item?.endTime || "",
+        mime: item?.mime || "",
+      },
+      "download_history"
+    );
+  });
+
+  results.sort((a, b) => toTimestamp(b.startTime) - toTimestamp(a.startTime));
+  return results;
+}
+
+function normalizeUrlForMatch(u) {
+  if (!u) return "";
+  try {
+    const parsed = new URL(u);
+    parsed.hash = "";
+    return parsed.toString();
+  } catch {
+    return u.trim();
+  }
+}
+
+function findDetectionForUrl(url) {
+  const target = normalizeUrlForMatch(url);
+  if (!target) return null;
+  const host = parseHost(url);
+
+  // Exact URL match first
+  const exact = manifestDetections.find((entry) => normalizeUrlForMatch(entry?.url) === target);
+  if (exact) return exact;
+
+  // Host match fallback
+  const hostMatch = manifestDetections.find((entry) => host && parseHost(entry?.url) === host);
+  if (hostMatch) return hostMatch;
+
+  return null;
+}
+
+// -------------------------------
+// Passive network detection of manifest requests
+// -------------------------------
+function recordManifestRequest(details) {
+  if (!details || !details.url) return;
+  if (!looksLikeManifestUrl(details.url)) return;
+  const pageUrl = details.initiator || details.documentUrl || details.originUrl || details.referrer || "";
+  const startTime = details.timeStamp ? new Date(details.timeStamp).toISOString() : "";
+  recordManifestDetection({
+    url: details.url,
+    tabId: typeof details.tabId === "number" ? details.tabId : -1,
+    source: "request",
+    startTime,
+    pageUrl,
+    headers: normalizeHeaders(details.requestHeaders || []),
+  });
+}
+
+if (
+  chrome &&
+  chrome.webRequest &&
+  chrome.webRequest.onCompleted &&
+  typeof chrome.webRequest.onCompleted.addListener === "function"
+) {
+  chrome.webRequest.onCompleted.addListener(
+    recordManifestRequest,
+    { urls: ["*://*/*.m3u8*", "*://*/*.mpd*"], types: ["xmlhttprequest", "other", "media"] },
+    []
+  );
+}
+
+if (
+  chrome &&
+  chrome.webRequest &&
+  chrome.webRequest.onBeforeSendHeaders &&
+  typeof chrome.webRequest.onBeforeSendHeaders.addListener === "function"
+) {
+  chrome.webRequest.onBeforeSendHeaders.addListener(
+    recordManifestRequest,
+    { urls: ["*://*/*.m3u8*", "*://*/*.mpd*"], types: ["xmlhttprequest", "other", "media"] },
+    ["requestHeaders", "extraHeaders"]
+  );
+}
 
 // EARLY redirect (prevents most .mpd downloads)
 chrome.webNavigation.onBeforeNavigate.addListener(async (details) => {
@@ -546,16 +788,26 @@ async function handleManifestDownload(item) {
     const mime = item.mime || "";
     if (!url && !mime) return;
 
-    // Only skip startup gating when we know the tab is a restored startup tab within the window.
     const tabId = typeof item.tabId === "number" && item.tabId >= 0 ? item.tabId : null;
+    const isManifest = looksLikeManifestUrl(url) || looksLikeManifestMime(mime);
+    if (!isManifest) return;
+
+    recordManifestDetection({
+      url: url || item.filename || "",
+      tabId: tabId ?? -1,
+      source: "download",
+      mime,
+      startTime: item.startTime || "",
+      pageUrl: item.referrer || item.referrerUrl || "",
+    });
+
+    // Only skip startup gating when we know the tab is a restored startup tab within the window.
     if (isStartup && isDuringExtendedStartup()) return;
     if (!isUserInitiatedNavigation(item) && isDuringExtendedStartup()) return;
     if (tabId !== null && shouldDeferForStartupTab(tabId)) return;
 
     const { autoOpenViewer = true } = await getSync({ autoOpenViewer: true });
     if (!autoOpenViewer) return;
-
-    if (!looksLikeManifestUrl(url) && !looksLikeManifestMime(mime)) return;
 
     // Prevent double-handling (e.g., onCreated + onDeterminingFilename)
     if (typeof item.id === "number") {
