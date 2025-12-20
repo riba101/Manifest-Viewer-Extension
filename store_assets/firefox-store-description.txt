@@ -1,0 +1,12 @@
+Inspect and troubleshoot HLS and MPEG-DASH manifests without leaving Firefox. Get formatted, syntax-highlighted views, clickable playlists with resolved relative paths, optional custom headers, and one-click copy. Auto-open on .m3u8/.mpd URLs, use a dark developer interface, and analyze MP4 atom structure. Built-in media compatibility checks and page manifest detection help media engineers, QA, and streaming teams work faster.
+
+Features:
+- Syntax-highlighted, formatted views for HLS (.m3u8) and MPEG-DASH (.mpd)
+- Clickable playlist URIs with automatic relative path resolution
+- Optional custom request headers for authenticated or special endpoints
+- One-click copy of manifest contents as plain text
+- Auto-open when visiting .m3u8 or .mpd URLs (optional toggle)
+- Dark, developer-focused interface for comfortable reading
+- MP4 atom/box structure inspection
+- Browser media compatibility checker (codec/DRM support)
+- Page scan to detect manifests loaded by the site

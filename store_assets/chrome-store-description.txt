@@ -1,0 +1,12 @@
+Manifest Viewer lets you inspect and debug MPEG-DASH (.mpd) and HLS (.m3u8) manifests directly in the browser. See syntax-highlighted playlists, follow clickable URIs with automatic relative resolution, and set custom request headers when needed. Copy manifests as text, auto-open on .m3u8/.mpd visits, switch to a dark developer UI, and dive into MP4 atom structure. Includes a browser media compatibility checker and page scanner to find manifests in use.
+
+Features:
+- Syntax-highlighted, formatted views for HLS (.m3u8) and MPEG-DASH (.mpd)
+- Clickable playlist URIs with automatic relative path resolution
+- Optional custom request headers for authenticated or special endpoints
+- One-click copy of manifest contents as plain text
+- Auto-open when visiting .m3u8 or .mpd URLs (optional toggle)
+- Dark, developer-focused interface for comfortable reading
+- MP4 atom/box structure inspection
+- Browser media compatibility checker (codec/DRM support)
+- Page scan to detect manifests loaded by the site

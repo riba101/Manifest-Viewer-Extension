@@ -37,12 +37,12 @@ function renderFooter(container) {
       //   <span class="supporters__label">Supported by</span>
       //   <a
       //     class="supporters__logo"
-      //     href="https://onair.events"
+      //     href="https://example.com"
       //     target="_blank"
       //     rel="noopener noreferrer"
-      //     aria-label="OnAir.Events"
+      //     aria-label="example.com"
       //   >
-      //     <img src="supporters/logos/onair.svg" alt="OnAir.Events logo" />
+      //     <img src="supporters/logos/example.svg" alt="Example.com logo" />
       //   </a>
       // </div>
 
