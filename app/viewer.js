@@ -1800,6 +1800,14 @@ async function fetchWithOptionalUA(url, ua) {
   const r = await fetch(url, fetchOptions);
   const t1 = performance.now();
   const ct = r.headers.get('content-type') || '';
+  const responseHeaders = [];
+  try {
+    r.headers.forEach((value, name) => {
+      responseHeaders.push([name, value]);
+    });
+  } catch {
+    // ignore
+  }
   const bufferPromise = r.arrayBuffer();
   const buffer = await bufferPromise;
   const t2 = performance.now();
@@ -1869,6 +1877,7 @@ async function fetchWithOptionalUA(url, ua) {
   return {
     status: r.status,
     contentType: ct,
+    responseHeaders,
     buffer,
     durationMs: responseMs,
     totalDurationMs: totalNetworkMs,
@@ -1876,25 +1885,83 @@ async function fetchWithOptionalUA(url, ua) {
   };
 }
 
-function renderMeta({ status, contentType, bytes, mode, durationMs }) {
+function renderMeta({ status, contentType, bytes, mode, durationMs, responseHeaders }) {
   metaEl.innerHTML = '';
+  const summary = document.createElement('div');
+  summary.className = 'meta-summary';
   const add = (label, value) => {
     const div = document.createElement('div');
     div.className = 'item';
-    div.innerHTML = `<strong>${label}:</strong><span>${value}</span>`;
-    metaEl.appendChild(div);
+    const strong = document.createElement('strong');
+    strong.textContent = `${label}:`;
+    const span = document.createElement('span');
+    if (value instanceof Node) {
+      span.appendChild(value);
+    } else {
+      span.textContent = value != null ? String(value) : '';
+    }
+    div.appendChild(strong);
+    div.appendChild(span);
+    summary.appendChild(div);
   };
   add('Status', `${status}`);
-  add('Content-Type', `<code>${escapeHTML(contentType || 'n/a')}</code>`);
-  add('Mode', mode.toUpperCase());
-  add('Size', `${bytes.toLocaleString()} bytes`);
+  const ctCode = document.createElement('code');
+  ctCode.textContent = contentType || 'n/a';
+  add('Content-Type', ctCode);
+  const modeLabel = typeof mode === 'string' && mode ? mode.toUpperCase() : 'AUTO';
+  add('Mode', modeLabel);
+  const byteLabel = Number.isFinite(bytes) ? bytes.toLocaleString() : '0';
+  add('Size', `${byteLabel} bytes`);
   const finiteResponse = Number.isFinite(durationMs) ? durationMs : null;
   if (finiteResponse !== null) add('Response time', `${formatDuration(finiteResponse)}`);
-  if (customHeaderEntries.length) {
-    const formatted = customHeaderEntries
-      .map(({ name, value }) => `<code>${escapeHTML(name)}: ${escapeHTML(value)}</code>`)
-      .join('<br />');
-    add('Request Headers', formatted);
+  metaEl.appendChild(summary);
+
+  const normalizedHeaders = Array.isArray(responseHeaders)
+    ? responseHeaders
+        .map((entry) => {
+          if (!entry) return null;
+          if (Array.isArray(entry) && entry.length >= 2) return { name: entry[0], value: entry[1] };
+          if (typeof entry.name === 'string') return { name: entry.name, value: entry.value };
+          return null;
+        })
+        .filter((h) => h && h.name)
+        .sort((a, b) => a.name.localeCompare(b.name))
+    : [];
+  if (normalizedHeaders.length) {
+    const headersBlock = document.createElement('details');
+    headersBlock.className = 'meta-headers';
+
+    const summaryEl = document.createElement('summary');
+    summaryEl.className = 'meta-headers__summary';
+    const labelWrap = document.createElement('div');
+    labelWrap.className = 'meta-headers__label';
+    const title = document.createElement('span');
+    title.textContent = 'Response Headers';
+    const chevron = document.createElement('span');
+    chevron.className = 'meta-headers__chevron';
+    chevron.setAttribute('aria-hidden', 'true');
+    labelWrap.appendChild(title);
+    labelWrap.appendChild(chevron);
+    const count = document.createElement('span');
+    count.className = 'meta-headers__count';
+    const total = normalizedHeaders.length;
+    count.textContent = total === 1 ? '1 header' : `${total} headers`;
+    summaryEl.appendChild(labelWrap);
+    summaryEl.appendChild(count);
+    headersBlock.appendChild(summaryEl);
+
+    const list = document.createElement('dl');
+    list.className = 'meta-headers__list';
+    normalizedHeaders.forEach(({ name, value }) => {
+      const dt = document.createElement('dt');
+      dt.textContent = name;
+      const dd = document.createElement('dd');
+      dd.textContent = value;
+      list.appendChild(dt);
+      list.appendChild(dd);
+    });
+    headersBlock.appendChild(list);
+    metaEl.appendChild(headersBlock);
   }
   // Total time and Processing time intentionally omitted to declutter meta panel
 }
@@ -2283,7 +2350,7 @@ async function load(options = {}) {
     copyManifestUrlBtn.textContent = '⧉ Copy Manifest URL';
     downloadManifestBtn.textContent = '⇣ Download Manifest';
     updateActionButtons(null);
-    const { status, contentType, buffer, durationMs, totalDurationMs, processingMs } = await fetchWithOptionalUA(url, ua);
+    const { status, contentType, buffer, durationMs, totalDurationMs, processingMs, responseHeaders } = await fetchWithOptionalUA(url, ua);
     lastLoadedContentType = contentType;
     const byteArray = new Uint8Array(buffer);
     const selectedMode = modeSelect.value;
@@ -2332,6 +2399,7 @@ async function load(options = {}) {
       durationMs,
       totalDurationMs,
       processingMs,
+      responseHeaders,
     };
     renderLoadedView({
       mode,

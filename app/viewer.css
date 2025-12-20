@@ -350,8 +350,8 @@ main {
 }
 
 .pane {
-  display: grid;
-  grid-template-columns: 320px 1fr;
+  display: flex;
+  flex-direction: column;
   border: 1px solid var(--border);
   border-radius: 12px;
   overflow: hidden;
@@ -362,10 +362,16 @@ main {
   padding: var(--pad);
   background: var(--panel);
   border-bottom: 1px solid var(--border);
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  display: flex;
+  flex-direction: column;
   gap: 12px;
   min-width: 280px;
+}
+
+.meta-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px 12px;
 }
 
 #meta .item {
@@ -384,7 +390,86 @@ main {
 
 #meta .item span {
   color: var(--muted);
-  margin-left: 0.5em; 
+  margin-left: 0.5em;
+}
+
+.meta-headers {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.meta-headers__summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-weight: 700;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+}
+
+.meta-headers__summary::-webkit-details-marker {
+  display: none;
+}
+
+.meta-headers__summary::marker {
+  display: none;
+}
+
+.meta-headers__label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.meta-headers__chevron {
+  width: 10px;
+  height: 10px;
+  border: solid var(--muted);
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+  transition: transform 0.15s ease;
+  flex-shrink: 0;
+}
+
+.meta-headers[open] .meta-headers__chevron {
+  transform: rotate(135deg);
+}
+
+.meta-headers__count {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.meta-headers__list {
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px 12px;
+  max-height: 260px;
+  overflow: auto;
+}
+
+.meta-headers[open] .meta-headers__list {
+  margin-top: 4px;
+}
+
+.meta-headers__list dt {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.meta-headers__list dd {
+  margin: 0;
+  color: var(--muted);
+  word-break: break-word;
 }
 
 .code-panel {
@@ -707,7 +792,7 @@ footer {
 }
 
 .pane {
-  display: flex; 
+  display: flex;
   flex-direction: column;
   border: 1px solid var(--border);
   border-radius: 12px;
@@ -719,9 +804,10 @@ footer {
   padding: var(--pad);
   background: var(--panel);
   border-bottom: 1px solid var(--border);
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 280px;
 }
 
 .code-panel {
