@@ -58,8 +58,9 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // Open viewer tab
-  function openViewer(manifestUrl, options = {}) {
-    const url = (manifestUrl && manifestUrl.trim()) || (urlEl ? urlEl.value.trim() : "");
+  function openViewer(manifestArg, options = {}) {
+    const manifestUrl = typeof manifestArg === "string" ? manifestArg.trim() : "";
+    const url = manifestUrl || (urlEl ? urlEl.value.trim() : "");
     if (urlEl && manifestUrl) urlEl.value = manifestUrl;
     const q = new URLSearchParams();
     if (url) q.set('u', url);
