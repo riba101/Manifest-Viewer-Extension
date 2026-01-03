@@ -217,11 +217,12 @@ function markTabAsStartup(tabId) {
 // -------------------------------
 // State & storage helpers
 // -------------------------------
-const state = { customUA: "", uaEnabled: true };
+const state = { customUA: "", uaEnabled: true, notifyOnDetect: true };
 
-chrome.storage.sync.get({ customUA: "", uaEnabled: true }, (res) => {
+chrome.storage.sync.get({ customUA: "", uaEnabled: true, notifyOnDetect: true }, (res) => {
   state.customUA = res.customUA || "";
   state.uaEnabled = typeof res.uaEnabled === "boolean" ? res.uaEnabled : true;
+  state.notifyOnDetect = res.notifyOnDetect !== false;
 });
 
 chrome.storage.onChanged.addListener((changes, area) => {
@@ -231,6 +232,9 @@ chrome.storage.onChanged.addListener((changes, area) => {
   }
   if (changes.uaEnabled) {
     state.uaEnabled = typeof changes.uaEnabled.newValue === "boolean" ? changes.uaEnabled.newValue : true;
+  }
+  if (changes.notifyOnDetect) {
+    state.notifyOnDetect = changes.notifyOnDetect.newValue !== false;
   }
 });
 
@@ -243,6 +247,9 @@ chrome.runtime.onInstalled.addListener(() => {
     }
     if (!Object.prototype.hasOwnProperty.call(res, "uaEnabled")) {
       updates.uaEnabled = true;
+    }
+    if (!Object.prototype.hasOwnProperty.call(res, "notifyOnDetect")) {
+      updates.notifyOnDetect = true;
     }
     if (Object.keys(updates).length) {
       chrome.storage.sync.set(updates);
@@ -443,10 +450,35 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg?.type === "GET_TAB_MANIFEST_DOWNLOADS") {
     const tabId = typeof msg.tabId === "number" ? msg.tabId : null;
     const pageUrl = typeof msg.pageUrl === "string" ? msg.pageUrl : "";
+    if (isBlockedContext(pageUrl)) {
+      sendResponse({ ok: true, downloads: [] });
+      return true;
+    }
     findManifestDownloadsForTab(tabId, pageUrl)
       .then((downloads) => sendResponse({ ok: true, downloads }))
       .catch((e) => sendResponse({ ok: false, error: e?.message || String(e) }));
     return true;
+  }
+  if (msg?.type === "GET_LATEST_TAB_MANIFEST") {
+    const tabId = typeof msg.tabId === "number" ? msg.tabId : null;
+    const pageUrl = typeof msg.pageUrl === "string" ? msg.pageUrl : "";
+    if (isBlockedContext(pageUrl)) {
+      sendResponse({ ok: true, manifest: null });
+      return true;
+    }
+    findManifestDownloadsForTab(tabId, pageUrl)
+      .then((downloads) => {
+        const manifest = downloads && downloads.length ? downloads[0] : null;
+        sendResponse({ ok: true, manifest });
+      })
+      .catch((e) => sendResponse({ ok: false, error: e?.message || String(e) }));
+    return true;
+  }
+  if (msg?.type === "CLEAR_TAB_MANIFEST_BADGE") {
+    const tabId = typeof msg.tabId === "number" ? msg.tabId : null;
+    if (tabId !== null) clearManifestBadge(tabId);
+    if (typeof sendResponse === "function") sendResponse({ ok: true });
+    return false;
   }
   if (msg?.type === "GET_UA") {
     sendResponse({ ua: state.customUA || "" });
@@ -478,11 +510,157 @@ function viewerUrlFor(u) {
   return chrome.runtime.getURL(`viewer.html?u=${encodeURIComponent(u)}`);
 }
 
+function isBlockedHost(host) {
+  if (!host) return false;
+  const lower = host.toLowerCase();
+  return lower === "123-test.stream";
+}
+
+function isBlockedContext(url) {
+  if (!url) return false;
+  if (isExtensionUrl(url)) return true;
+  const host = parseHost(url);
+  return isBlockedHost(host);
+}
+
 // Track tabs we've redirected to prevent loops
 const redirectingTabs = new Set();
 const handledDownloadIds = new Set();
 const manifestDetections = [];
 const MANIFEST_DETECTION_LIMIT = 50;
+const manifestNotificationPayloads = new Map();
+const manifestNotificationTimestamps = new Map();
+const MANIFEST_NOTIFICATION_DEBOUNCE_MS = 15000;
+
+function setManifestBadge(tabId, text) {
+  if (typeof tabId !== "number" || tabId < 0) return;
+  try {
+    if (chrome?.action?.setBadgeText) {
+      chrome.action.setBadgeText({ tabId, text });
+    }
+    if (chrome?.action?.setBadgeBackgroundColor && text) {
+      chrome.action.setBadgeBackgroundColor({ tabId, color: "#fbbc04" });
+    }
+  } catch {
+    // ignore
+  }
+}
+
+function clearManifestBadge(tabId) {
+  setManifestBadge(tabId, "");
+}
+
+function notificationsPermissionGranted() {
+  return new Promise((resolve) => {
+    try {
+      if (!chrome?.notifications?.getPermissionLevel) {
+        resolve(true);
+        return;
+      }
+      chrome.notifications.getPermissionLevel((level) => {
+        if (chrome.runtime.lastError) {
+          resolve(true);
+          return;
+        }
+        resolve(level === "granted");
+      });
+    } catch {
+      resolve(true);
+    }
+  });
+}
+
+function manifestNotificationMessage(entry) {
+  const url = entry?.url || "";
+  try {
+    const parsed = new URL(url);
+    const parts = parsed.pathname.split("/").filter(Boolean);
+    const name = parts.length ? parts[parts.length - 1] : parsed.hostname;
+    const host = parsed.hostname || parseHost(entry?.pageUrl || "");
+    if (name && host) return `${name} (${host})`;
+    return url || "Manifest detected";
+  } catch {
+    const host = parseHost(entry?.pageUrl || "");
+    if (url && host) return `${url} (${host})`;
+    return url || host || "Manifest detected";
+  }
+}
+
+function showManifestNotification(entry) {
+  if (!entry || !entry.url || state.notifyOnDetect === false) return;
+  if (!chrome?.notifications?.create) return;
+
+  notificationsPermissionGranted().then((granted) => {
+    if (!granted) return;
+
+    const normalized = normalizeUrlForMatch(entry.url);
+    const now = Date.now();
+    const last = manifestNotificationTimestamps.get(normalized);
+    if (last && now - last < MANIFEST_NOTIFICATION_DEBOUNCE_MS) return;
+    manifestNotificationTimestamps.set(normalized, now);
+
+    const id = `manifest-${now}-${Math.random().toString(16).slice(2)}`;
+    const iconUrl =
+      (chrome.runtime && typeof chrome.runtime.getURL === "function" && chrome.runtime.getURL("icons/icon-128.png")) ||
+      "icons/icon-128.png";
+    const payload = {
+      url: entry.url,
+      tabId: entry.tabId,
+      pageUrl: entry.pageUrl,
+    };
+    manifestNotificationPayloads.set(id, payload);
+    try {
+      chrome.notifications.create(
+        id,
+        {
+          type: "basic",
+          iconUrl,
+          title: "Manifest detected",
+          message: manifestNotificationMessage(entry),
+          priority: 2,
+          requireInteraction: true,
+          silent: false,
+        },
+        () => {
+          if (chrome.runtime.lastError) {
+            manifestNotificationPayloads.delete(id);
+          }
+        }
+      );
+    } catch {
+      manifestNotificationPayloads.delete(id);
+    }
+  });
+}
+
+if (
+  chrome &&
+  chrome.notifications &&
+  chrome.notifications.onClicked &&
+  typeof chrome.notifications.onClicked.addListener === "function"
+) {
+  chrome.notifications.onClicked.addListener((notificationId) => {
+    const payload = manifestNotificationPayloads.get(notificationId);
+    if (!payload || !payload.url) return;
+    try {
+      chrome.tabs.create({ url: viewerUrlFor(payload.url) });
+    } finally {
+      manifestNotificationPayloads.delete(notificationId);
+      try { chrome.notifications.clear(notificationId); } catch { /* ignore */ }
+    }
+  });
+}
+
+if (
+  chrome &&
+  chrome.notifications &&
+  chrome.notifications.onClosed &&
+  typeof chrome.notifications.onClosed.addListener === "function"
+) {
+  chrome.notifications.onClosed.addListener((notificationId) => {
+    manifestNotificationPayloads.delete(notificationId);
+  });
+}
 
 function normalizeHeaders(headers) {
   if (!Array.isArray(headers)) return [];
@@ -526,6 +704,9 @@ function recordManifestDetection({
   const normalizedUrl = typeof url === "string" ? url.trim() : "";
   if (!normalizedUrl) return;
   if (!looksLikeManifestUrl(normalizedUrl) && !looksLikeManifestMime(mime)) return;
+  const pageCandidate = pageUrl || normalizedUrl;
+  if (isBlockedContext(pageCandidate)) return;
+
   const normalizedHeaders = normalizeHeaders(headers);
 
   const entry = {
@@ -553,6 +734,30 @@ function recordManifestDetection({
   manifestDetections.unshift(entry);
   if (manifestDetections.length > MANIFEST_DETECTION_LIMIT) {
     manifestDetections.length = MANIFEST_DETECTION_LIMIT;
+  }
+
+  if (state.notifyOnDetect === false) return;
+
+  try {
+    const payload = {
+      url: entry.url,
+      tabId: entry.tabId,
+      source: entry.source,
+      startTime: entry.startTime,
+      mime: entry.mime,
+      pageUrl: entry.pageUrl,
+    };
+    chrome.runtime.sendMessage(
+      { type: "TAB_MANIFEST_DETECTED", manifest: payload },
+      () => {
+        // Ignore absence of listeners (popup not open)
+        if (chrome.runtime.lastError) return;
+      }
+    );
+    setManifestBadge(entry.tabId, "!");
+    showManifestNotification(entry);
+  } catch {
+    // ignore
   }
 }
 
@@ -598,6 +803,8 @@ function searchManifestDownloads(limit = 50) {
 
 async function findManifestDownloadsForTab(tabId, pageUrl) {
   const host = parseHost(pageUrl || "");
+  if (isBlockedContext(pageUrl) || isBlockedHost(host)) return [];
+
   const results = [];
   const seen = new Set();
   const add = (entry, source = "download") => {
@@ -610,10 +817,12 @@ async function findManifestDownloadsForTab(tabId, pageUrl) {
       source,
       startTime: entry.startTime || "",
       mime: entry.mime || "",
+      pageUrl: entry.pageUrl || "",
     });
   };
 
   manifestDetections.forEach((entry) => {
+    if (isBlockedContext(entry?.pageUrl) || isBlockedContext(entry?.url)) return;
     if (matchesTabOrHost(entry, tabId, host)) add(entry, entry.source || "detected");
   });
 
@@ -630,6 +839,7 @@ async function findManifestDownloadsForTab(tabId, pageUrl) {
         tabId: typeof item?.tabId === "number" ? item.tabId : -1,
         startTime: item?.startTime || item?.endTime || "",
         mime: item?.mime || "",
+        pageUrl: item?.referrer || item?.referrerUrl || "",
       },
       "download_history"
     );
@@ -860,5 +1070,7 @@ if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     buildExactUrlRule,
     looksLikeManifestUrl,
+    isBlockedContext,
+    isBlockedHost,
   };
 }

@@ -44,13 +44,50 @@
         cursor: pointer;
       }
       button:hover { border-color: var(--acc1); }
+      button:disabled {
+        opacity: 0.4;
+        cursor: not-allowed;
+        border-color: var(--border);
+      }
+      select:disabled {
+        opacity: 0.6;
+      }
       small { color: var(--muted); }
       .inline {
         display: inline-flex; align-items: center; gap: 8px;
       }
+      .notice {
+        display: none;
+        border: 1px solid var(--acc1);
+        background: #101520;
+        padding: 10px 12px;
+        border-radius: 12px;
+        gap: 12px;
+        margin-bottom: 10px;
+      }
+      .notice.show { display: flex; }
+      .notice-text { flex: 1; }
+      .notice-title { font-weight: 600; margin-bottom: 4px; }
+      .notice-label { color: var(--muted); font-size: 12px; word-break: break-word; }
+      .notice-actions { display: flex; gap: 8px; align-self: center; }
+      button.ghost {
+        background: transparent;
+        color: var(--muted);
+      }
     </style>
   </head>
   <body>
+    <div class="notice" id="manifestNotice">
+      <div class="notice-text">
+        <div class="notice-title">New manifest detected on this tab</div>
+        <div class="notice-label" id="manifestNoticeLabel"></div>
+      </div>
+      <div class="notice-actions">
+        <button id="manifestNoticeOpen" title="Open this manifest in the viewer">Open</button>
+        <button id="manifestNoticeDismiss" class="ghost" title="Dismiss this notification">Dismiss</button>
+      </div>
+    </div>
+
     <div class="row">
       <input id="url" type="url" placeholder="https://example.com/manifest.mpd or .m3u8" />
       <button id="open">Open</button>
@@ -69,6 +106,12 @@
       <label class="inline">
         <input id="autoOpenToggle" type="checkbox" />
         Auto-open viewer for .m3u8 / .mpd
+      </label>
+    </div>
+    <div class="row" id="notifyRow">
+      <label class="inline">
+        <input id="notifyToggle" type="checkbox" />
+        Notify when a manifest is detected on this tab
       </label>
     </div>
 

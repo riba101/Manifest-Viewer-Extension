@@ -3,7 +3,7 @@
   "name": "Manifest Viewer (DASH/HLS)",
   "version": "1.3.4",
   "description": "Pretty-print DASH (.mpd) and HLS (.m3u8) manifests with syntax highlighting.",
-  "permissions": ["storage", "tabs", "declarativeNetRequestWithHostAccess", "webNavigation", "downloads", "webRequest"],
+  "permissions": ["storage", "tabs", "declarativeNetRequestWithHostAccess", "webNavigation", "downloads", "webRequest", "notifications"],
   "host_permissions": ["<all_urls>"],
   "declarative_net_request": { "rule_resources": [] },
 
