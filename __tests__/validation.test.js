@@ -101,4 +101,76 @@ describe('manifest validation helpers', () => {
     const result = validation.validateDashManifest(manifest);
     expect(result.errors.some((entry) => entry.message.includes('SegmentTemplate'))).toBe(true);
   });
+
+  test('validateHlsManifest deduplicates child playlist fetches', async () => {
+    const master = [
+      '#EXTM3U',
+      '#EXT-X-VERSION:7',
+      '#EXT-X-STREAM-INF:BANDWIDTH=1000000,FRAME-RATE=24',
+      'video.m3u8',
+      '#EXT-X-STREAM-INF:BANDWIDTH=2000000,FRAME-RATE=24',
+      'video.m3u8', // duplicate should be ignored
+    ].join('\n');
+
+    const child = ['#EXTM3U', '#EXT-X-VERSION:3', '#EXT-X-TARGETDURATION:6', '#EXTINF:6,', 'seg1.ts', '#EXT-X-ENDLIST'].join('\n');
+    const fetcher = jest.fn(async () => child);
+
+    const result = await validation.validateHlsManifest(master, {
+      baseUrl: 'https://cdn.example.com/master.m3u8',
+      fetchPlaylist: fetcher,
+    });
+
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(result.mediaPlaylists).toHaveLength(1);
+    expect(result.errors).toHaveLength(0);
+  });
+
+  test('validateHlsManifest reports empty child playlist content', async () => {
+    const master = ['#EXTM3U', '#EXT-X-STREAM-INF:BANDWIDTH=100000', 'video.m3u8'].join('\n');
+    const fetcher = jest.fn(async () => '   ');
+
+    const result = await validation.validateHlsManifest(master, {
+      baseUrl: 'https://cdn.example.com/master.m3u8',
+      fetchPlaylist: fetcher,
+    });
+
+    expect(result.errors.some((entry) => entry.message.includes('returned empty content'))).toBe(true);
+  });
+
+  test('validateHlsManifest rejects empty input', async () => {
+    const result = await validation.validateHlsManifest('');
+    expect(result.errors).toEqual([expect.objectContaining({ message: 'Manifest is empty.' })]);
+  });
+
+  test('validateHlsManifest enforces EXT-X-VERSION for newer tags', async () => {
+    const manifest = [
+      '#EXTM3U',
+      '#EXT-X-VERSION:3',
+      '#EXT-X-STREAM-INF:BANDWIDTH=100000',
+      'video.m3u8',
+      '#EXT-X-BYTERANGE:100@0',
+    ].join('\n');
+
+    const result = await validation.validateHlsManifest(manifest);
+    expect(result.info.some((entry) => entry.message.includes('Detected 1 referenced child playlist'))).toBe(true);
+    expect(result.warnings.some((entry) => entry.message.includes('not validated'))).toBe(true);
+    expect(result.errors.some((entry) => entry.message.includes('requires at least version 4'))).toBe(true);
+  });
+
+  test('validateDashManifest reports XML parser errors', () => {
+    const malformed = '<MPD><Unclosed';
+    const result = validation.validateDashManifest(malformed);
+    expect(result.errors.some((entry) => entry.message.includes('XML syntax errors'))).toBe(true);
+  });
+
+  test('validateDashManifest reports missing DOMParser', () => {
+    const originalParser = global.DOMParser;
+    try {
+      delete global.DOMParser;
+      const result = validation.validateDashManifest('<MPD />');
+      expect(result.errors.some((entry) => entry.message.includes('DOMParser is unavailable'))).toBe(true);
+    } finally {
+      global.DOMParser = originalParser;
+    }
+  });
 });

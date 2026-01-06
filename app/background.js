@@ -1072,5 +1072,16 @@ if (typeof module !== "undefined" && module.exports) {
     looksLikeManifestUrl,
     isBlockedContext,
     isBlockedHost,
+    // exposed for tests
+    isUserInitiatedNavigation,
+    shouldDeferForStartupTab,
+    manifestNotificationMessage,
+    mergeHeaders,
+    markTabAsStartup,
+    recordManifestDetection,
+    isDuringExtendedStartup,
+    findDetectionForUrl,
+    applyUARuleForUrl,
+    handleManifestDownload,
   };
 }

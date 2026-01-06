@@ -3826,10 +3826,18 @@ if (typeof module !== 'undefined' && module.exports) {
     formatHex,
     decodeIso639,
     formatUuid,
+    formatFixed1616,
+    formatFixed88,
+    formatDetailDisplay,
     buildDashData,
     parseMp4Structure,
     // expose for tests
     highlightJSON,
     linkifyAbsoluteUrls,
+    loadStoredHeaders,
+    setCustomHeaders,
+    pushCurrentState,
+    restoreSnapshot,
+    renderLoadedView,
   };
 }
