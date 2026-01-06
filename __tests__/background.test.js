@@ -2,15 +2,15 @@ let background;
 let messageListener;
 let storageChangedListener;
 let onBeforeNavigateListener;
-let onCommittedListener;
-let onErrorListener;
 let downloadCreatedListener;
-let downloadDeterminingListener;
 let webRequestCompletedListener;
-let isDuringExtendedStartup;
+
+// Use fake timers to capture background startup timers and cleanup across tests
+jest.useFakeTimers();
 
 beforeEach(() => {
   jest.clearAllMocks();
+  jest.clearAllTimers();
 });
 
 beforeAll(() => {
@@ -59,14 +59,10 @@ beforeAll(() => {
         }),
       },
       onCommitted: {
-        addListener: jest.fn((cb) => {
-          onCommittedListener = cb;
-        }),
+        addListener: jest.fn(),
       },
       onErrorOccurred: {
-        addListener: jest.fn((cb) => {
-          onErrorListener = cb;
-        }),
+        addListener: jest.fn(),
       },
     },
     downloads: {
@@ -76,9 +72,7 @@ beforeAll(() => {
         }),
       },
       onDeterminingFilename: {
-        addListener: jest.fn((cb) => {
-          downloadDeterminingListener = cb;
-        }),
+        addListener: jest.fn(),
       },
       search: jest.fn((opts, cb) => cb([])),
       cancel: jest.fn((id, cb) => {
@@ -104,13 +98,17 @@ beforeAll(() => {
   };
 
   background = require('../app/background.js');
-  isDuringExtendedStartup = background.isDuringExtendedStartup;
+  jest.runOnlyPendingTimers();
+});
+
+afterEach(() => {
+  jest.runOnlyPendingTimers();
+  jest.clearAllTimers();
 });
 
 afterAll(() => {
   delete require.cache[require.resolve('../app/background.js')];
-  jest.useFakeTimers();
-  jest.runOnlyPendingTimers();
+  jest.runAllTimers();
   jest.useRealTimers();
 });
 
@@ -222,7 +220,7 @@ describe('background helpers', () => {
 
     expect(typeof downloadCreatedListener).toBe('function');
     await downloadCreatedListener(item);
-    await new Promise((resolve) => setImmediate(resolve));
+    await Promise.resolve();
     nowSpy.mockRestore();
 
     expect(chrome.storage.sync.get).toHaveBeenCalled();
@@ -245,16 +243,16 @@ describe('background helpers', () => {
       requestHeaders: [{ name: 'User-Agent', value: 'TestUA' }],
     });
 
-    const sendResponse = jest.fn();
-    const shouldAsync = messageListener(
-      { type: 'GET_TAB_MANIFEST_DOWNLOADS', tabId: 55, pageUrl: 'https://foo.test' },
-      null,
-      sendResponse
-    );
-    await new Promise((resolve) => setImmediate(resolve));
+    const response = await new Promise((resolve) => {
+      const shouldAsync = messageListener(
+        { type: 'GET_TAB_MANIFEST_DOWNLOADS', tabId: 55, pageUrl: 'https://foo.test' },
+        null,
+        (payload) => resolve(payload)
+      );
+      expect(shouldAsync).toBe(true);
+    });
 
-    expect(shouldAsync).toBe(true);
-    expect(sendResponse).toHaveBeenCalledWith(
+    expect(response).toEqual(
       expect.objectContaining({
         ok: true,
         downloads: expect.arrayContaining([expect.objectContaining({ url: 'https://foo.test/video.m3u8' })]),
@@ -290,16 +288,16 @@ describe('background helpers', () => {
       ])
     );
 
-    const sendResponse = jest.fn();
-    const shouldAsync = messageListener(
-      { type: 'GET_TAB_MANIFEST_DOWNLOADS', tabId: 77, pageUrl: 'https://media.test/page' },
-      null,
-      sendResponse
-    );
-    await new Promise((resolve) => setImmediate(resolve));
+    const response = await new Promise((resolve) => {
+      const shouldAsync = messageListener(
+        { type: 'GET_TAB_MANIFEST_DOWNLOADS', tabId: 77, pageUrl: 'https://media.test/page' },
+        null,
+        (payload) => resolve(payload)
+      );
+      expect(shouldAsync).toBe(true);
+    });
 
-    expect(shouldAsync).toBe(true);
-    expect(sendResponse).toHaveBeenCalledWith(
+    expect(response).toEqual(
       expect.objectContaining({
         ok: true,
         downloads: expect.arrayContaining([expect.objectContaining({ url: 'https://media.test/clip.mpd', source: 'download_history' })]),
@@ -339,29 +337,29 @@ describe('background helpers', () => {
     chrome.declarativeNetRequest.updateDynamicRules.mockImplementationOnce(() =>
       Promise.reject(new Error('dnr fail'))
     );
-    const sendResponse = jest.fn();
-    const shouldAsync = messageListener(
-      { type: 'APPLY_UA_RULE', url: 'https://example.com/manifest.mpd', ua: 'AgentX' },
-      null,
-      sendResponse
-    );
-    expect(shouldAsync).toBe(true);
-    await new Promise((resolve) => setImmediate(resolve));
-    expect(sendResponse).toHaveBeenCalledWith(expect.objectContaining({ ok: false, error: expect.stringMatching(/dnr fail/i) }));
+    const response = await new Promise((resolve) => {
+      const shouldAsync = messageListener(
+        { type: 'APPLY_UA_RULE', url: 'https://example.com/manifest.mpd', ua: 'AgentX' },
+        null,
+        (payload) => resolve(payload)
+      );
+      expect(shouldAsync).toBe(true);
+    });
+    expect(response).toEqual(expect.objectContaining({ ok: false, error: expect.stringMatching(/dnr fail/i) }));
   });
 
   test('APPLY_UA_RULE succeeds and applies rule', async () => {
     chrome.declarativeNetRequest.updateDynamicRules.mockImplementation(() => Promise.resolve());
-    const sendResponse = jest.fn();
-    const shouldAsync = messageListener(
-      { type: 'APPLY_UA_RULE', url: 'https://example.com/manifest.mpd', ua: 'AgentY' },
-      null,
-      sendResponse
-    );
-    expect(shouldAsync).toBe(true);
-    await new Promise((resolve) => setImmediate(resolve));
+    const response = await new Promise((resolve) => {
+      const shouldAsync = messageListener(
+        { type: 'APPLY_UA_RULE', url: 'https://example.com/manifest.mpd', ua: 'AgentY' },
+        null,
+        (payload) => resolve(payload)
+      );
+      expect(shouldAsync).toBe(true);
+    });
     expect(chrome.declarativeNetRequest.updateDynamicRules).toHaveBeenCalled();
-    expect(sendResponse).toHaveBeenCalledWith(expect.objectContaining({ ok: true }));
+    expect(response).toEqual(expect.objectContaining({ ok: true }));
   });
 
   test('isUserInitiatedNavigation detects typed vs link clicks', () => {
@@ -407,7 +405,6 @@ describe('background helpers', () => {
   });
 
   test('manifest detection sets badge and notification', async () => {
-    jest.useFakeTimers();
     chrome.action = {
       setBadgeText: jest.fn(),
       setBadgeBackgroundColor: jest.fn(),
@@ -432,7 +429,6 @@ describe('background helpers', () => {
     await Promise.resolve();
     expect(chrome.action.setBadgeText).toHaveBeenCalledWith({ tabId: 5, text: '!' });
     expect(chrome.notifications.create).toHaveBeenCalled();
-    jest.useRealTimers();
   });
 
   test('recordManifestDetection merges headers across duplicate entries', () => {
@@ -486,10 +482,4 @@ describe('background helpers', () => {
     await background.handleManifestDownload(item);
     expect(chrome.tabs.update).not.toHaveBeenCalled();
   });
-});
-
-afterAll(() => {
-  jest.useFakeTimers();
-  jest.runAllTimers();
-  jest.useRealTimers();
 });

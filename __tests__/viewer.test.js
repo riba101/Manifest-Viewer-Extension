@@ -4,6 +4,8 @@ const { JSDOM } = require('jsdom');
 
 let viewer;
 
+jest.useFakeTimers();
+
 beforeAll(() => {
   const htmlPath = path.join(__dirname, '..', 'app', 'viewer.html');
   const html = fs.readFileSync(htmlPath, 'utf-8');
@@ -48,15 +50,12 @@ beforeAll(() => {
 });
 
 afterEach(() => {
-  if (jest.isMockFunction(global.setTimeout)) {
-    jest.runOnlyPendingTimers();
-    jest.useRealTimers();
-  }
+  jest.runOnlyPendingTimers();
+  jest.clearAllTimers();
 });
 
 afterAll(() => {
   delete require.cache[require.resolve('../app/viewer.js')];
-  jest.useFakeTimers();
   jest.runAllTimers();
   jest.useRealTimers();
 });
@@ -443,6 +442,7 @@ describe('viewer utilities', () => {
     // Unsupported segments list should exist
     const list = document.querySelector('.dash-rep-list');
     const options = Array.from(document.querySelectorAll('#dash-base-select option')).map((o) => o.value);
+    expect(list).not.toBeNull();
     expect(options).toEqual(expect.arrayContaining(['https://base.test/', 'https://cdn2.test/']));
     // Unsupported segments should be recorded in data
     expect(data.unsupportedSegments.some((s) => s.type === 'SegmentBase')).toBe(true);
