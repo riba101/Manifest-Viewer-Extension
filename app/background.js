@@ -345,16 +345,16 @@ function getSync(defaults) {
 }
 
 // -------------------------------
-// UA override via DNR (per-request, temporary)
+// Request header overrides via DNR (per-request, temporary)
 // -------------------------------
-function buildExactUrlRule(url, ua, id) {
+function buildExactUrlRule(url, requestHeaders, id) {
   const escaped = url.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   return {
     id,
     priority: 1,
     action: {
       type: "modifyHeaders",
-      requestHeaders: [{ header: "User-Agent", operation: "set", value: ua }],
+      requestHeaders,
     },
     condition: {
       regexFilter: `^${escaped}$`,
@@ -406,7 +406,38 @@ function generateUniqueRuleId(existingIds) {
   return fallback;
 }
 
-async function applyUARuleForUrl(url, ua) {
+function normalizeOverrideHeaders(headers) {
+  if (!Array.isArray(headers)) return [];
+  const byName = new Map();
+  headers.forEach((h) => {
+    const name = typeof h?.name === "string" ? h.name.trim() : "";
+    if (!name) return;
+    const value = typeof h?.value === "string" ? h.value : "";
+    byName.set(name.toLowerCase(), { name, value });
+  });
+  return Array.from(byName.values());
+}
+
+function buildRequestHeaderOverrides({ ua = "", headers = [] }) {
+  const normalized = normalizeOverrideHeaders(headers).filter(
+    (h) => h && h.name && h.name.toLowerCase() !== "user-agent"
+  );
+  const byName = new Map();
+  normalized.forEach((h) => {
+    byName.set(h.name.toLowerCase(), { name: h.name, value: h.value });
+  });
+  if (ua) {
+    byName.set("user-agent", { name: "User-Agent", value: ua });
+  }
+  return Array.from(byName.values()).map((h) => ({
+    header: h.name,
+    operation: "set",
+    value: h.value,
+  }));
+}
+
+async function applyHeaderRuleForUrl(url, requestHeaders) {
+  if (!Array.isArray(requestHeaders) || !requestHeaders.length) return;
   // Clear any stale dynamic rules first to prevent ID collisions and lingering overrides
   const existing = await getDynamicRules();
   if (existing && existing.length) {
@@ -416,7 +447,7 @@ async function applyUARuleForUrl(url, ua) {
 
   const existingIds = existing ? existing.map((r) => r.id) : [];
   const ruleId = generateUniqueRuleId(existingIds);
-  const rule = buildExactUrlRule(url, ua, ruleId);
+  const rule = buildExactUrlRule(url, requestHeaders, ruleId);
   await chrome.declarativeNetRequest.updateDynamicRules({ addRules: [rule] });
 
   // Best-effort cleanup (service worker may be suspended before this fires; that's OK since we clear on next add).
@@ -425,7 +456,40 @@ async function applyUARuleForUrl(url, ua) {
   }, 5000);
 }
 
+async function applyUARuleForUrl(url, ua) {
+  const requestHeaders = buildRequestHeaderOverrides({ ua });
+  await applyHeaderRuleForUrl(url, requestHeaders);
+}
+
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  if (msg?.type === "APPLY_REQUEST_HEADERS" && typeof msg.url === "string") {
+    const headers = Array.isArray(msg.headers) ? msg.headers : [];
+    const ua =
+      state.uaEnabled === false
+        ? ""
+        : (msg.ua && msg.ua.trim()) || state.customUA || "";
+    const requestHeaders = buildRequestHeaderOverrides({ ua, headers });
+    if (!requestHeaders.length) {
+      sendResponse({ ok: false, error: "No headers to apply" });
+      return true;
+    }
+    applyHeaderRuleForUrl(msg.url, requestHeaders)
+      .then(() => sendResponse({ ok: true }))
+      .catch(async (e) => {
+        if (ua && headers.length) {
+          try {
+            const uaOnly = buildRequestHeaderOverrides({ ua });
+            await applyHeaderRuleForUrl(msg.url, uaOnly);
+            sendResponse({ ok: true, warning: "Custom headers not applied" });
+          } catch (err) {
+            sendResponse({ ok: false, error: err?.message || String(err) });
+          }
+          return;
+        }
+        sendResponse({ ok: false, error: e?.message || String(e) });
+      });
+    return true;
+  }
   if (msg?.type === "APPLY_UA_RULE" && typeof msg.url === "string") {
     if (state.uaEnabled === false) {
       sendResponse({ ok: false, error: "User-Agent override disabled" });

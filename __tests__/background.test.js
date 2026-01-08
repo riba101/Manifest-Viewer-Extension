@@ -113,8 +113,12 @@ afterAll(() => {
 });
 
 describe('background helpers', () => {
-  test('buildExactUrlRule escapes URLs and injects UA header', () => {
-    const rule = background.buildExactUrlRule('https://example.com/manifest.mpd?x=1', 'TestUA', 42);
+  test('buildExactUrlRule escapes URLs and injects request headers', () => {
+    const rule = background.buildExactUrlRule(
+      'https://example.com/manifest.mpd?x=1',
+      [{ header: 'User-Agent', operation: 'set', value: 'TestUA' }],
+      42
+    );
     expect(rule).toMatchObject({
       id: 42,
       action: {

@@ -38,6 +38,7 @@ const navigationStack = [];
 let currentValidationView = null;
 const HEADERS_STORAGE_KEY = 'mv_custom_headers_v1';
 const RESERVED_HEADER_NAMES = new Set(['user-agent']);
+const DNR_OVERRIDE_HEADER_NAMES = new Set(['origin']);
 const HEADER_NAME_PATTERN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
 let customHeaderEntries = [];
 let isHeadersPanelOpen = false;
@@ -515,6 +516,25 @@ function handleHeadersSave() {
 function getActiveCustomHeaderEntries() {
   if (!Array.isArray(customHeaderEntries)) return [];
   return customHeaderEntries.filter((entry) => entry && entry.name && entry.enabled !== false);
+}
+
+function splitCustomHeaderEntries(entries) {
+  const dnrOverrides = [];
+  const fetchEntries = [];
+  const overrideByName = new Map();
+  if (!Array.isArray(entries)) return { dnrOverrides, fetchEntries };
+  entries.forEach((entry) => {
+    if (!entry || !entry.name) return;
+    const lower = entry.name.toLowerCase();
+    if (DNR_OVERRIDE_HEADER_NAMES.has(lower)) {
+      const value = typeof entry.value === 'string' ? entry.value : '';
+      overrideByName.set(lower, { name: entry.name, value });
+    } else {
+      fetchEntries.push(entry);
+    }
+  });
+  overrideByName.forEach((entry) => dnrOverrides.push(entry));
+  return { dnrOverrides, fetchEntries };
 }
 
 function collectHeaderEntriesFromUI() {
@@ -1761,12 +1781,22 @@ async function fetchWithOptionalUA(url, ua) {
   } catch {
     // ignore
   }
-  if (uaEnabled && ua && ua.trim()) {
+  const activeHeaders = getActiveCustomHeaderEntries();
+  const { dnrOverrides, fetchEntries } = splitCustomHeaderEntries(activeHeaders);
+  const uaValue = uaEnabled && ua && ua.trim() ? ua.trim() : '';
+  if (uaValue || dnrOverrides.length) {
     try {
       if (typeof chrome !== 'undefined' && chrome.runtime && typeof chrome.runtime.sendMessage === 'function') {
-        const res = await chrome.runtime.sendMessage({ type: 'APPLY_UA_RULE', url, ua });
+        const res = await chrome.runtime.sendMessage({
+          type: 'APPLY_REQUEST_HEADERS',
+          url,
+          ua: uaValue,
+          headers: dnrOverrides,
+        });
         if (!res || !res.ok) {
-          console.warn('UA rule not applied:', res && res.error);
+          console.warn('Header rule not applied:', res && res.error);
+        } else if (res.warning) {
+          console.warn('Header rule warning:', res.warning);
         }
       }
     } catch (err) {
@@ -1783,15 +1813,14 @@ async function fetchWithOptionalUA(url, ua) {
     credentials: 'omit',
     cache: 'no-store',
   };
-  const activeHeaders = getActiveCustomHeaderEntries();
-  if (activeHeaders.length) {
+  if (fetchEntries.length) {
     if (typeof Headers !== 'undefined') {
       const headers = new Headers();
-      activeHeaders.forEach((entry) => headers.append(entry.name, entry.value));
+      fetchEntries.forEach((entry) => headers.append(entry.name, entry.value));
       fetchOptions.headers = headers;
     } else {
       const headers = {};
-      activeHeaders.forEach((entry) => {
+      fetchEntries.forEach((entry) => {
         headers[entry.name] = entry.value;
       });
       fetchOptions.headers = headers;
@@ -1813,14 +1842,14 @@ async function fetchWithOptionalUA(url, ua) {
   const t2 = performance.now();
 
   let timingEntry = null;
-  let fetchEntries = [];
+  let timingEntries = [];
   try {
     const entries = performance.getEntriesByType('resource');
     if (entries && entries.length) {
       const resolvedUrl = r.url || url;
       const exactMatches = entries.filter((entry) => entry.name === resolvedUrl || entry.name === url);
-      fetchEntries = exactMatches.length ? exactMatches : entries.filter((entry) => entry.initiatorType === 'fetch');
-      if (fetchEntries.length) timingEntry = fetchEntries[fetchEntries.length - 1];
+      timingEntries = exactMatches.length ? exactMatches : entries.filter((entry) => entry.initiatorType === 'fetch');
+      if (timingEntries.length) timingEntry = timingEntries[timingEntries.length - 1];
     }
   } catch (err) {
     console.warn('Failed to read resource timings', err);
@@ -1861,8 +1890,8 @@ async function fetchWithOptionalUA(url, ua) {
         : null;
     if (Number.isFinite(timingRedirect) && timingRedirect > 0) redirectMs = timingRedirect;
   }
-  if (fetchEntries.length > 1) {
-    const redirectDur = fetchEntries
+  if (timingEntries.length > 1) {
+    const redirectDur = timingEntries
       .slice(0, -1)
       .reduce((sum, entry) => (Number.isFinite(entry.duration) && entry.duration > 0 ? sum + entry.duration : sum), 0);
     if (redirectDur > 0 && !Number.isFinite(redirectMs)) redirectMs = redirectDur;
